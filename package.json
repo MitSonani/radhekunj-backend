@@ -33,7 +33,9 @@
   ],
   "license": "UNLICENSED",
   "dependencies": {
-    "@prisma/client": "^6.19.0",
+    "@prisma/adapter-pg": "^7.9.1",
+    "@prisma/client": "^7.9.1",
+    "@types/pg": "^8.21.0",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^4.21.2",
@@ -41,6 +43,7 @@
     "helmet": "^8.1.0",
     "http-errors": "^2.0.0",
     "ioredis": "^5.7.0",
+    "pg": "^8.23.0",
     "uuid": "^11.1.0",
     "winston": "^3.17.0",
     "zod": "^3.25.76"
@@ -57,7 +60,7 @@
     "eslint": "^9.33.0",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.6.2",
-    "prisma": "^6.19.0",
+    "prisma": "^7.9.1",
     "supertest": "^7.1.4",
     "tsx": "^4.20.4",
     "typescript": "^5.9.2",

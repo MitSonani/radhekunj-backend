@@ -1,6 +1,14 @@
 import { PrismaClient } from '@prisma/client';
-import { isProduction } from '../config/env.js';
+import { PrismaPg } from '@prisma/adapter-pg';
+import pg from 'pg';
+import { env, isProduction } from '../config/env.js';
 import { logger } from '../shared/utils/logger.js';
+
+const pool = new pg.Pool({
+  connectionString: env.DATABASE_URL,
+});
+
+const adapter = new PrismaPg(pool);
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
@@ -9,6 +17,7 @@ const globalForPrisma = globalThis as unknown as {
 export const prisma =
   globalForPrisma.prisma ??
   new PrismaClient({
+    adapter,
     log: isProduction ? ['error', 'warn'] : ['query', 'error', 'warn'],
   });
 
