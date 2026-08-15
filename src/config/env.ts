@@ -6,6 +6,7 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   REDIS_URL: z.string().optional(),
   CORS_ORIGIN: z.string().default('http://localhost:3001'),
+  JWT_SECRET: z.string().min(1, 'JWT_SECRET is required'),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

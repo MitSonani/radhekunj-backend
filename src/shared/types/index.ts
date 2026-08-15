@@ -1,8 +1,19 @@
 import 'express';
 
+export type AuthUser = {
+  id: string;
+  name: string;
+  email: string | null;
+  role: {
+    id: string;
+    name: string;
+  } | null;
+};
+
 declare module 'express-serve-static-core' {
   interface Request {
     id?: string;
+    user?: AuthUser;
   }
 }
 

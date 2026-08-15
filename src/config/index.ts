@@ -12,4 +12,5 @@ export const appConfig = {
     windowMs: 15 * 60 * 1000,
     max: isProduction ? 100 : 1000,
   },
+  jwtSecret: env.JWT_SECRET,
 };
