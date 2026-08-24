@@ -13,4 +13,11 @@ export const appConfig = {
     max: isProduction ? 100 : 1000,
   },
   jwtSecret: env.JWT_SECRET,
+  s3: {
+    region: env.AWS_REGION,
+    accessKeyId: env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
+    bucket: env.AWS_S3_BUCKET,
+    publicBaseUrl: env.AWS_S3_PUBLIC_BASE_URL,
+  },
 };

@@ -16,10 +16,18 @@ declare module 'express-serve-static-core' {
   }
 }
 
+export type PaginationMeta = {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+};
+
 export type ApiResponse<T = unknown> = {
   success: boolean;
   data?: T;
   message?: string;
+  pagination?: PaginationMeta;
 };
 
 export type HealthResponse = {

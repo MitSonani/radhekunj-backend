@@ -33,6 +33,8 @@
   ],
   "license": "UNLICENSED",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1116.0",
+    "@aws-sdk/s3-presigned-post": "^3.1116.0",
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "^7.9.1",
     "@types/pg": "^8.21.0",
