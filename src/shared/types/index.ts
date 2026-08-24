@@ -3,7 +3,6 @@ import 'express';
 export type AuthUser = {
   id: string;
   name: string;
-  email: string | null;
   role: {
     id: string;
     name: string;

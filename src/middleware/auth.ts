@@ -42,7 +42,6 @@ export async function authenticateJWT(
       select: {
         id: true,
         name: true,
-        email: true,
         role: {
           select: {
             id: true,

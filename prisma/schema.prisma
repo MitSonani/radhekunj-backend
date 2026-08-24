@@ -12,9 +12,8 @@ datasource db {
 model User {
   id           String   @id @default(uuid()) @db.Uuid
   name         String   @db.VarChar
-  email        String?  @db.VarChar
   countryCode  String?  @map("country_code") @db.VarChar
-  mobileNumber String?  @map("mobile_number") @db.VarChar
+  mobileNumber String   @unique @map("mobile_number") @db.VarChar
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
 

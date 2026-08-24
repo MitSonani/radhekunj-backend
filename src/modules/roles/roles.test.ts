@@ -19,14 +19,15 @@ describe('Roles API Endpoints', () => {
     await prisma.user.deleteMany({});
     await prisma.role.deleteMany({});
 
-    // Seed roles
-    adminRole = await prisma.role.create({ data: { name: 'Admin' } });
-    customerRole = await prisma.role.create({ data: { name: 'Customer' } });
+    // Seed roles in lowercase as per requireRole(['admin']) change
+    adminRole = await prisma.role.create({ data: { name: 'admin' } });
+    customerRole = await prisma.role.create({ data: { name: 'customer' } });
 
-    // Seed users
+    // Seed users with required and unique mobileNumber
     const adminUser = await prisma.user.create({
       data: {
         name: 'Admin User',
+        mobileNumber: '9999999999',
         roleId: adminRole.id,
       },
     });
@@ -34,6 +35,7 @@ describe('Roles API Endpoints', () => {
     const customerUser = await prisma.user.create({
       data: {
         name: 'Customer User',
+        mobileNumber: '8888888888',
         roleId: customerRole.id,
       },
     });
@@ -140,7 +142,6 @@ describe('Roles API Endpoints', () => {
 
   describe('GET /api/v1/admin/roles', () => {
     it('should return all roles ordered by creation date', async () => {
-      // Admin and Customer roles are already created in beforeEach
       const response = await request(app)
         .get('/api/v1/admin/roles')
         .set('Authorization', `Bearer ${adminToken}`);
@@ -149,7 +150,6 @@ describe('Roles API Endpoints', () => {
       expect(response.body).toMatchObject({
         success: true,
       });
-      // We expect at least the 2 seeded roles: Admin and Customer
       expect(response.body.data.length).toBeGreaterThanOrEqual(2);
       expect(response.body.data[0]).toHaveProperty('name');
     });
@@ -166,7 +166,7 @@ describe('Roles API Endpoints', () => {
         success: true,
         data: {
           id: adminRole.id,
-          name: 'Admin',
+          name: 'admin',
         },
       });
     });
@@ -264,6 +264,7 @@ describe('Roles API Endpoints', () => {
       await prisma.user.create({
         data: {
           name: 'Kunjesh',
+          mobileNumber: '7777777777',
           roleId: role.id,
         },
       });

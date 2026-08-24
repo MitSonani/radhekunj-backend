@@ -5,6 +5,7 @@ import { appConfig } from './config/index.js';
 import { connectDatabase, disconnectDatabase } from './database/prisma.js';
 import { connectRedis, disconnectRedis } from './database/redis.js';
 import { logger } from './shared/utils/logger.js';
+import { startNotificationWorker, stopNotificationWorker } from './shared/utils/queue.js';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -14,6 +15,7 @@ let isShuttingDown = false;
 async function startServer(): Promise<void> {
   await connectDatabase();
   await connectRedis();
+  startNotificationWorker();
 
   const app = createApp();
   server = createServer(app);
@@ -55,6 +57,7 @@ async function shutdown(signal: string): Promise<void> {
       logger.info('HTTP server closed');
     }
 
+    await stopNotificationWorker();
     await disconnectRedis();
     await disconnectDatabase();
 
