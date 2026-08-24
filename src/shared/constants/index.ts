@@ -7,6 +7,13 @@ export const PAGINATION = {
   MAX_LIMIT: 100,
 } as const;
 
+export const ATTRIBUTE = {
+  NAME_MAX: 100,
+  VALUE_MAX: 100,
+  SEARCH_MAX: 100,
+  COLOR_CODE_PATTERN: /^#[0-9A-Fa-f]{6}$/,
+} as const;
+
 export const CATEGORY_IMAGE = {
   MAX_BYTES: 5 * 1024 * 1024,
   PRESIGNED_URL_EXPIRES_IN: 300,
