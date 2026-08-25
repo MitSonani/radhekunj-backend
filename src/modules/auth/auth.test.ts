@@ -4,6 +4,7 @@ import request from 'supertest';
 import { createApp } from '../../app.js';
 import { prisma } from '../../database/prisma.js';
 import { HTTP_STATUS } from '../../shared/constants/index.js';
+import { _clearOtpSendLocksForTest } from '../../shared/utils/otpStore.js';
 
 describe('Auth API Endpoints (OTP Flow)', () => {
   const app = createApp();
@@ -11,6 +12,7 @@ describe('Auth API Endpoints (OTP Flow)', () => {
   beforeEach(async () => {
     await prisma.user.deleteMany({});
     await prisma.role.deleteMany({});
+    await _clearOtpSendLocksForTest();
   });
 
   afterAll(async () => {

@@ -35,3 +35,13 @@ export class ValidationError extends AppError {
     this.name = 'ValidationError';
   }
 }
+
+export class RateLimitError extends AppError {
+  readonly retryAfterSeconds: number;
+
+  constructor(message: string, retryAfterSeconds: number) {
+    super(429, message);
+    this.name = 'RateLimitError';
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}

@@ -1,7 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 import { ZodError } from 'zod';
 import createHttpError, { HttpError } from 'http-errors';
-import { AppError } from '../shared/errors/appError.js';
+import { AppError, RateLimitError } from '../shared/errors/appError.js';
 import { isProduction } from '../config/env.js';
 import { logger } from '../shared/utils/logger.js';
 import { ErrorResponse } from '../shared/types/index.js';
@@ -12,6 +12,21 @@ export function notFoundHandler(_req: Request, _res: Response, next: NextFunctio
 
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction): void {
   const requestId = req.id;
+
+  // RateLimitError must be checked before the generic AppError branch because it extends AppError
+  if (err instanceof RateLimitError) {
+    logError(err, req, 429);
+
+    res.setHeader('Retry-After', String(err.retryAfterSeconds));
+
+    res.status(429).json({
+      success: false,
+      message: err.message,
+      retryAfterSeconds: err.retryAfterSeconds,
+      requestId,
+    });
+    return;
+  }
 
   if (err instanceof AppError) {
     logError(err, req, err.statusCode);

@@ -41,6 +41,11 @@ export const PRODUCT_IMAGE = {
   ALLOWED_MIME_TYPES: ALLOWED_IMAGE_MIME_TYPES,
 } as const;
 
+export const OTP = {
+  /** Minimum seconds a user must wait before requesting another OTP for the same identifier. */
+  SEND_COOLDOWN_SECONDS: 60,
+} as const;
+
 export const HTTP_STATUS = {
   OK: 200,
   CREATED: 201,
