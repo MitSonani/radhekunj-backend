@@ -18,6 +18,17 @@ interface VerifyOtpDetails {
 }
 
 /**
+ * Returns true if a user with the given mobile number is already registered.
+ */
+export async function userExists(mobileNumber: string): Promise<boolean> {
+  const user = await prisma.user.findUnique({
+    where: { mobileNumber },
+    select: { id: true },
+  });
+  return !!user;
+}
+
+/**
  * Generates an OTP, saves it in Redis, and enqueues a job in BullMQ to send it.
  * @returns The generated OTP in non-production environments to aid testing.
  */

@@ -14,15 +14,18 @@ export async function sendOtpHandler(req: Request, res: Response): Promise<void>
 
   const identifier = `${countryCode || ''}${mobileNumber}`;
 
-  const otp = await authService.sendOtp(identifier, {
-    countryCode,
-    mobileNumber,
-  });
+  const [otp, isNewUser] = await Promise.all([
+    authService.sendOtp(identifier, { countryCode, mobileNumber }),
+    authService.userExists(mobileNumber).then((exists) => !exists),
+  ]);
 
   const response: ApiResponse = {
     success: true,
     message: 'OTP sent successfully',
-    ...(otp ? { data: { otp } } : {}),
+    data: {
+      isNewUser,
+      ...(otp ? { otp } : {}),
+    },
   };
 
   res.status(HTTP_STATUS.OK).json(response);
