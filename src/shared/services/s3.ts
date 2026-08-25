@@ -119,13 +119,20 @@ export function isManagedImageKey(key: string): boolean {
 }
 
 export function buildPublicUrl(imageKey: string): string {
-  const { region, bucket, publicBaseUrl } = getS3Config();
+  const { region, accessKeyId, secretAccessKey, bucket, publicBaseUrl } = appConfig.s3;
 
-  if (publicBaseUrl) {
-    return `${publicBaseUrl.replace(/\/$/, '')}/${imageKey}`;
+  // When S3 is fully configured, return the real URL.
+  if (region && accessKeyId && secretAccessKey && bucket) {
+    if (publicBaseUrl) {
+      return `${publicBaseUrl.replace(/\/$/, '')}/${imageKey}`;
+    }
+    return `https://${bucket}.s3.${region}.amazonaws.com/${imageKey}`;
   }
 
-  return `https://${bucket}.s3.${region}.amazonaws.com/${imageKey}`;
+  // S3 not configured (development) — return a deterministic picsum placeholder
+  // so the catalog API still works without real file storage.
+  const seed = imageKey.replace(/[^a-zA-Z0-9]/g, '').slice(0, 16) || 'placeholder';
+  return `https://picsum.photos/seed/${seed}/800/1067`;
 }
 
 function buildCategoryImageKey(contentType: AllowedImageMimeType): string {
