@@ -106,6 +106,12 @@ export async function count(filters: CategoryListFilters): Promise<number> {
   });
 }
 
+export async function countProducts(categoryId: string): Promise<number> {
+  return prisma.product.count({
+    where: { categoryId },
+  });
+}
+
 export async function create(data: CreateCategoryData): Promise<CategoryRecord> {
   return prisma.category.create({
     data,

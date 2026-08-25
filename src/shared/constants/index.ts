@@ -14,12 +14,31 @@ export const ATTRIBUTE = {
   COLOR_CODE_PATTERN: /^#[0-9A-Fa-f]{6}$/,
 } as const;
 
+export const ALLOWED_IMAGE_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
+
 export const CATEGORY_IMAGE = {
   MAX_BYTES: 5 * 1024 * 1024,
   PRESIGNED_URL_EXPIRES_IN: 300,
   KEY_PREFIX: 'categories/',
   PURPOSE: 'category_image',
-  ALLOWED_MIME_TYPES: ['image/jpeg', 'image/png', 'image/webp'] as const,
+  ALLOWED_MIME_TYPES: ALLOWED_IMAGE_MIME_TYPES,
+} as const;
+
+export const PRODUCT = {
+  NAME_MAX: 200,
+  DESCRIPTION_MAX: 10000,
+  SKU_MAX: 64,
+  SEARCH_MAX: 100,
+  ALT_TEXT_MAX: 255,
+  COLOR_ATTRIBUTE_SLUG: 'color',
+} as const;
+
+export const PRODUCT_IMAGE = {
+  MAX_BYTES: 5 * 1024 * 1024,
+  PRESIGNED_URL_EXPIRES_IN: 300,
+  KEY_PREFIX: 'products/',
+  PURPOSE: 'product_image',
+  ALLOWED_MIME_TYPES: ALLOWED_IMAGE_MIME_TYPES,
 } as const;
 
 export const HTTP_STATUS = {

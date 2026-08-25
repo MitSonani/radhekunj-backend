@@ -3,10 +3,10 @@ import { DeleteObjectCommand, HeadObjectCommand, S3Client } from '@aws-sdk/clien
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 import { appConfig } from '../../config/index.js';
 import { AppError } from '../errors/appError.js';
-import { CATEGORY_IMAGE } from '../constants/index.js';
+import { ALLOWED_IMAGE_MIME_TYPES, CATEGORY_IMAGE, PRODUCT_IMAGE } from '../constants/index.js';
 import { logger } from '../utils/logger.js';
 
-export type AllowedImageMimeType = (typeof CATEGORY_IMAGE.ALLOWED_MIME_TYPES)[number];
+export type AllowedImageMimeType = (typeof ALLOWED_IMAGE_MIME_TYPES)[number];
 
 export type PresignedUploadResult = {
   uploadUrl: string;
@@ -18,14 +18,30 @@ export type PresignedUploadResult = {
   maxSizeBytes: number;
 };
 
+export type ParsedProductImageKey = {
+  productId: string;
+  attributeValueId?: string;
+};
+
 const MIME_TO_EXTENSION: Record<AllowedImageMimeType, 'jpg' | 'png' | 'webp'> = {
   'image/jpeg': 'jpg',
   'image/png': 'png',
   'image/webp': 'webp',
 };
 
-const CATEGORY_IMAGE_KEY_PATTERN =
-  /^categories\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png|webp)$/;
+const UUID_PATTERN = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+
+const CATEGORY_IMAGE_KEY_PATTERN = new RegExp(
+  `^categories/${UUID_PATTERN}/${UUID_PATTERN}\\.(jpg|png|webp)$`,
+);
+
+const PRODUCT_GENERIC_IMAGE_KEY_PATTERN = new RegExp(
+  `^products/(${UUID_PATTERN})/(${UUID_PATTERN})\\.(jpg|png|webp)$`,
+);
+
+const PRODUCT_COLOR_IMAGE_KEY_PATTERN = new RegExp(
+  `^products/(${UUID_PATTERN})/colors/(${UUID_PATTERN})/(${UUID_PATTERN})\\.(jpg|png|webp)$`,
+);
 
 type ResolvedS3Config = {
   region: string;
@@ -75,6 +91,33 @@ export function isManagedCategoryImageKey(key: string): boolean {
   return CATEGORY_IMAGE_KEY_PATTERN.test(key);
 }
 
+export function parseProductImageKey(key: string): ParsedProductImageKey | null {
+  const colorMatch = PRODUCT_COLOR_IMAGE_KEY_PATTERN.exec(key);
+
+  if (colorMatch?.[1] && colorMatch[2]) {
+    return {
+      productId: colorMatch[1],
+      attributeValueId: colorMatch[2],
+    };
+  }
+
+  const genericMatch = PRODUCT_GENERIC_IMAGE_KEY_PATTERN.exec(key);
+
+  if (genericMatch?.[1]) {
+    return { productId: genericMatch[1] };
+  }
+
+  return null;
+}
+
+export function isManagedProductImageKey(key: string): boolean {
+  return parseProductImageKey(key) !== null;
+}
+
+export function isManagedImageKey(key: string): boolean {
+  return isManagedCategoryImageKey(key) || isManagedProductImageKey(key);
+}
+
 export function buildPublicUrl(imageKey: string): string {
   const { region, bucket, publicBaseUrl } = getS3Config();
 
@@ -90,6 +133,21 @@ function buildCategoryImageKey(contentType: AllowedImageMimeType): string {
   return `${CATEGORY_IMAGE.KEY_PREFIX}${randomUUID()}/${randomUUID()}.${extension}`;
 }
 
+export function buildProductImageKey(
+  productId: string,
+  contentType: AllowedImageMimeType,
+  attributeValueId?: string,
+): string {
+  const extension = MIME_TO_EXTENSION[contentType];
+  const fileName = `${randomUUID()}.${extension}`;
+
+  if (attributeValueId) {
+    return `${PRODUCT_IMAGE.KEY_PREFIX}${productId}/colors/${attributeValueId}/${fileName}`;
+  }
+
+  return `${PRODUCT_IMAGE.KEY_PREFIX}${productId}/${fileName}`;
+}
+
 /**
  * Creates a presigned POST that the Admin Panel uses to upload directly to S3.
  * Object keys are generated server-side. File size is enforced by S3 via content-length-range.
@@ -97,9 +155,12 @@ function buildCategoryImageKey(contentType: AllowedImageMimeType): string {
 export async function createPresignedUploadUrl(input: {
   contentType: AllowedImageMimeType;
   fileSize: number;
+  objectKey?: string;
+  expiresIn?: number;
 }): Promise<PresignedUploadResult> {
   const config = getS3Config();
-  const imageKey = buildCategoryImageKey(input.contentType);
+  const imageKey = input.objectKey ?? buildCategoryImageKey(input.contentType);
+  const expiresIn = input.expiresIn ?? CATEGORY_IMAGE.PRESIGNED_URL_EXPIRES_IN;
 
   try {
     const { url, fields } = await createPresignedPost(getS3Client(), {
@@ -112,7 +173,7 @@ export async function createPresignedUploadUrl(input: {
       Fields: {
         'Content-Type': input.contentType,
       },
-      Expires: CATEGORY_IMAGE.PRESIGNED_URL_EXPIRES_IN,
+      Expires: expiresIn,
     });
 
     return {
@@ -121,7 +182,7 @@ export async function createPresignedUploadUrl(input: {
       fields,
       imageKey,
       imageUrl: buildPublicUrl(imageKey),
-      expiresIn: CATEGORY_IMAGE.PRESIGNED_URL_EXPIRES_IN,
+      expiresIn,
       maxSizeBytes: input.fileSize,
     };
   } catch (error) {
@@ -136,7 +197,7 @@ export async function createPresignedUploadUrl(input: {
  * Verifies that a previously issued object key actually exists in S3.
  */
 export async function assertObjectExists(imageKey: string): Promise<void> {
-  if (!isManagedCategoryImageKey(imageKey)) {
+  if (!isManagedImageKey(imageKey)) {
     throw new AppError(400, 'Invalid image key');
   }
 
@@ -149,10 +210,7 @@ export async function assertObjectExists(imageKey: string): Promise<void> {
     );
   } catch (error) {
     if (isS3NotFoundError(error)) {
-      throw new AppError(
-        400,
-        'Uploaded image was not found. Upload the image before saving the category.',
-      );
+      throw new AppError(400, 'Uploaded image was not found. Upload the image before saving.');
     }
 
     logger.error('Failed to verify S3 object', {
@@ -164,7 +222,7 @@ export async function assertObjectExists(imageKey: string): Promise<void> {
 }
 
 /**
- * Deletes a category-owned S3 object. Unmanaged keys are ignored.
+ * Deletes a managed S3 object. Unmanaged keys are ignored.
  * Failures are logged and not rethrown so a successful database write is not rolled back by S3.
  */
 export async function deleteObjectIfExists(imageKey: string | null | undefined): Promise<void> {
@@ -172,7 +230,7 @@ export async function deleteObjectIfExists(imageKey: string | null | undefined):
     return;
   }
 
-  if (!isManagedCategoryImageKey(imageKey)) {
+  if (!isManagedImageKey(imageKey)) {
     logger.warn('Refusing to delete unmanaged S3 object', { imageKey });
     return;
   }

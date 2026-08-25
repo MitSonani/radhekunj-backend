@@ -117,7 +117,11 @@ async function ensureUniqueValueLabel(
   value: string,
   excludeId?: string,
 ): Promise<void> {
-  const existing = await attributeRepository.findValueByValueInsensitive(attributeId, value, excludeId);
+  const existing = await attributeRepository.findValueByValueInsensitive(
+    attributeId,
+    value,
+    excludeId,
+  );
 
   if (existing) {
     throw new AppError(409, `Attribute value "${value}" already exists`);
@@ -215,8 +219,8 @@ export async function updateAttribute(id: string, input: UpdateAttributeInput): 
 
 /**
  * Deletes an attribute. Values must be removed first because AttributeValue
- * references Attribute with ON DELETE RESTRICT. Product references are not
- * modeled yet; once they exist, deletion of in-use attributes must also be rejected.
+ * references Attribute with ON DELETE RESTRICT. In-use values (variants/images)
+ * must also be removed before the attribute can be deleted.
  */
 export async function deleteAttribute(id: string): Promise<void> {
   await getAttributeById(id);
@@ -311,7 +315,11 @@ export async function updateAttributeValue(
   if (input.value !== undefined && input.value !== existing.value) {
     await ensureUniqueValueLabel(attributeId, input.value, valueId);
     data.value = input.value;
-    data.slug = await ensureUniqueValueSlug(attributeId, slugFromLabel(input.value, 'value'), valueId);
+    data.slug = await ensureUniqueValueSlug(
+      attributeId,
+      slugFromLabel(input.value, 'value'),
+      valueId,
+    );
   }
 
   if (input.colorCode !== undefined) {
@@ -330,11 +338,16 @@ export async function updateAttributeValue(
 }
 
 /**
- * Deletes an attribute value. Product variant references are not modeled yet;
- * once they exist, deletion of referenced values must be rejected.
+ * Deletes an attribute value. Rejected when product variants or product images reference it.
  */
 export async function deleteAttributeValue(attributeId: string, valueId: string): Promise<void> {
   await getAttributeValueById(attributeId, valueId);
+
+  const referenceCount = await attributeRepository.countValueReferences(valueId);
+
+  if (referenceCount > 0) {
+    throw new AppError(409, 'This attribute value is in use and cannot be deleted.');
+  }
 
   try {
     await attributeRepository.removeValue(valueId);

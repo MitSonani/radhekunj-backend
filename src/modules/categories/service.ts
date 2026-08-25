@@ -215,10 +215,18 @@ export async function updateCategory(
 }
 
 /**
- * Deletes a category. Product references are not modeled yet; once they exist, deletion must be rejected if products remain.
+ * Deletes a category. Rejected when products still reference it.
  */
 export async function deleteCategory(id: string): Promise<void> {
   const existing = await getCategoryById(id);
+  const productCount = await categoryRepository.countProducts(id);
+
+  if (productCount > 0) {
+    throw new AppError(
+      409,
+      'This category has products and cannot be deleted. Reassign or deactivate those products first.',
+    );
+  }
 
   await categoryRepository.remove(id);
   await deleteObjectIfExists(existing.imageKey);

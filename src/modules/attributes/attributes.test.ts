@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call */
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
@@ -170,7 +170,9 @@ describe('Attributes API Endpoints', () => {
 
   describe('GET /api/v1/admin/attributes/:id', () => {
     it('should retrieve an attribute by ID', async () => {
-      const attribute = await prisma.attribute.create({ data: { name: 'Material', slug: 'material' } });
+      const attribute = await prisma.attribute.create({
+        data: { name: 'Material', slug: 'material' },
+      });
 
       const response = await request(app)
         .get(`/api/v1/admin/attributes/${attribute.id}`)
@@ -204,7 +206,9 @@ describe('Attributes API Endpoints', () => {
 
   describe('PATCH /api/v1/admin/attributes/:id', () => {
     it('should update the name and regenerate the slug', async () => {
-      const attribute = await prisma.attribute.create({ data: { name: 'Old Name', slug: 'old-name' } });
+      const attribute = await prisma.attribute.create({
+        data: { name: 'Old Name', slug: 'old-name' },
+      });
 
       const response = await request(app)
         .patch(`/api/v1/admin/attributes/${attribute.id}`)

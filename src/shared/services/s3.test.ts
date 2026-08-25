@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
-import { assertObjectExists, createPresignedUploadUrl, isManagedCategoryImageKey } from './s3.js';
+import {
+  assertObjectExists,
+  createPresignedUploadUrl,
+  isManagedCategoryImageKey,
+  isManagedProductImageKey,
+  parseProductImageKey,
+} from './s3.js';
 import { HTTP_STATUS } from '../constants/index.js';
 import { AppError } from '../errors/appError.js';
 
@@ -10,6 +16,11 @@ vi.mock('@aws-sdk/s3-presigned-post', () => ({
 
 const VALID_IMAGE_KEY =
   'categories/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.jpg';
+const PRODUCT_ID = '11111111-1111-1111-1111-111111111111';
+const COLOR_VALUE_ID = '22222222-2222-2222-2222-222222222222';
+const FILE_ID = '33333333-3333-3333-3333-333333333333';
+const GENERIC_PRODUCT_KEY = `products/${PRODUCT_ID}/${FILE_ID}.jpg`;
+const COLOR_PRODUCT_KEY = `products/${PRODUCT_ID}/colors/${COLOR_VALUE_ID}/${FILE_ID}.webp`;
 
 describe('isManagedCategoryImageKey', () => {
   it('accepts server-generated category object keys', () => {
@@ -19,11 +30,29 @@ describe('isManagedCategoryImageKey', () => {
   it('rejects client-controlled or unsafe keys', () => {
     expect(isManagedCategoryImageKey('categories/photo.jpg')).toBe(false);
     expect(isManagedCategoryImageKey('categories/../secrets.txt')).toBe(false);
-    expect(
-      isManagedCategoryImageKey(
-        'products/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.jpg',
-      ),
-    ).toBe(false);
+    expect(isManagedCategoryImageKey(GENERIC_PRODUCT_KEY)).toBe(false);
+  });
+});
+
+describe('isManagedProductImageKey', () => {
+  it('accepts generic and color-specific product object keys', () => {
+    expect(isManagedProductImageKey(GENERIC_PRODUCT_KEY)).toBe(true);
+    expect(isManagedProductImageKey(COLOR_PRODUCT_KEY)).toBe(true);
+  });
+
+  it('rejects unmanaged product keys', () => {
+    expect(isManagedProductImageKey('products/photo.jpg')).toBe(false);
+    expect(isManagedProductImageKey(`products/${PRODUCT_ID}/../secrets.txt`)).toBe(false);
+  });
+});
+
+describe('parseProductImageKey', () => {
+  it('extracts product and optional color identifiers', () => {
+    expect(parseProductImageKey(GENERIC_PRODUCT_KEY)).toEqual({ productId: PRODUCT_ID });
+    expect(parseProductImageKey(COLOR_PRODUCT_KEY)).toEqual({
+      productId: PRODUCT_ID,
+      attributeValueId: COLOR_VALUE_ID,
+    });
   });
 });
 
@@ -58,6 +87,22 @@ describe('createPresignedUploadUrl', () => {
           ['content-length-range', 1, 1024],
           ['eq', '$Content-Type', 'image/jpeg'],
         ],
+      }),
+    );
+  });
+
+  it('uses a supplied product object key', async () => {
+    const result = await createPresignedUploadUrl({
+      contentType: 'image/webp',
+      fileSize: 2048,
+      objectKey: COLOR_PRODUCT_KEY,
+    });
+
+    expect(result.imageKey).toBe(COLOR_PRODUCT_KEY);
+    expect(createPresignedPost).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        Key: COLOR_PRODUCT_KEY,
       }),
     );
   });

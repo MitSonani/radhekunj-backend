@@ -53,6 +53,8 @@ model Category {
   createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz
   updatedAt   DateTime       @updatedAt @map("updated_at") @db.Timestamptz
 
+  products Product[]
+
   @@index([status])
   @@map("categories")
 }
@@ -78,9 +80,108 @@ model AttributeValue {
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  attribute Attribute @relation(fields: [attributeId], references: [id], onDelete: Restrict)
+  attribute         Attribute                  @relation(fields: [attributeId], references: [id], onDelete: Restrict)
+  variantAttributes ProductVariantAttribute[]
+  productImages     ProductImage[]
 
   @@unique([attributeId, value])
   @@unique([attributeId, slug])
   @@map("attribute_values")
+}
+
+enum ProductStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("product_status")
+}
+
+enum ProductVariantStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("product_variant_status")
+}
+
+model Product {
+  id          String        @id @default(uuid()) @db.Uuid
+  categoryId  String        @map("category_id") @db.Uuid
+  name        String        @db.VarChar(200)
+  slug        String        @unique @db.VarChar(120)
+  description String?       @db.Text
+  basePrice   Decimal       @map("base_price") @db.Decimal(12, 2)
+  status      ProductStatus @default(ACTIVE)
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+
+  category Category         @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  variants ProductVariant[]
+  images   ProductImage[]
+
+  @@index([categoryId])
+  @@index([status])
+  @@map("products")
+}
+
+model ProductVariant {
+  id             String               @id @default(uuid()) @db.Uuid
+  productId      String               @map("product_id") @db.Uuid
+  sku            String               @unique @db.VarChar(64)
+  price          Decimal              @db.Decimal(12, 2)
+  compareAtPrice Decimal?             @map("compare_at_price") @db.Decimal(12, 2)
+  status         ProductVariantStatus @default(ACTIVE)
+  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime             @updatedAt @map("updated_at") @db.Timestamptz
+
+  product    Product                   @relation(fields: [productId], references: [id], onDelete: Restrict)
+  attributes ProductVariantAttribute[]
+  inventory  Inventory?
+
+  @@index([productId])
+  @@map("product_variants")
+}
+
+model ProductVariantAttribute {
+  id               String @id @default(uuid()) @db.Uuid
+  variantId        String @map("variant_id") @db.Uuid
+  attributeValueId String @map("attribute_value_id") @db.Uuid
+
+  variant        ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  attributeValue AttributeValue @relation(fields: [attributeValueId], references: [id], onDelete: Restrict)
+
+  @@unique([variantId, attributeValueId])
+  @@index([attributeValueId])
+  @@map("product_variant_attributes")
+}
+
+model Inventory {
+  id               String   @id @default(uuid()) @db.Uuid
+  variantId        String   @unique @map("variant_id") @db.Uuid
+  quantity         Int      @default(0)
+  reservedQuantity Int      @default(0) @map("reserved_quantity")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@map("inventory")
+}
+
+model ProductImage {
+  id               String   @id @default(uuid()) @db.Uuid
+  productId        String   @map("product_id") @db.Uuid
+  attributeValueId String?  @map("attribute_value_id") @db.Uuid
+  objectKey        String   @map("object_key") @db.VarChar(512)
+  altText          String?  @map("alt_text") @db.VarChar(255)
+  sortOrder        Int      @default(0) @map("sort_order")
+  isPrimary        Boolean  @default(false) @map("is_primary")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  product        Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  attributeValue AttributeValue? @relation(fields: [attributeValueId], references: [id], onDelete: Restrict)
+
+  @@index([productId])
+  @@index([attributeValueId])
+  @@map("product_images")
 }

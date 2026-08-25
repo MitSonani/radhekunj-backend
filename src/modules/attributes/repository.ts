@@ -24,7 +24,9 @@ export const attributeValueSelect = {
 } satisfies Prisma.AttributeValueSelect;
 
 export type AttributeRecord = Prisma.AttributeGetPayload<{ select: typeof attributeSelect }>;
-export type AttributeValueRecord = Prisma.AttributeValueGetPayload<{ select: typeof attributeValueSelect }>;
+export type AttributeValueRecord = Prisma.AttributeValueGetPayload<{
+  select: typeof attributeValueSelect;
+}>;
 
 export type AttributeListFilters = {
   search?: string;
@@ -245,4 +247,13 @@ export async function removeValue(id: string): Promise<AttributeValueRecord> {
     where: { id },
     select: attributeValueSelect,
   });
+}
+
+export async function countValueReferences(valueId: string): Promise<number> {
+  const [variantCount, imageCount] = await Promise.all([
+    prisma.productVariantAttribute.count({ where: { attributeValueId: valueId } }),
+    prisma.productImage.count({ where: { attributeValueId: valueId } }),
+  ]);
+
+  return variantCount + imageCount;
 }
