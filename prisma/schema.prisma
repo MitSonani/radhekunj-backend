@@ -22,6 +22,7 @@ model User {
   cart   Cart?
 
   wishlistItems WishlistItem[]
+  addresses     Address[]
 
   @@map("users")
 }
@@ -83,7 +84,7 @@ model AttributeValue {
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  attribute         Attribute                  @relation(fields: [attributeId], references: [id], onDelete: Restrict)
+  attribute         Attribute                 @relation(fields: [attributeId], references: [id], onDelete: Restrict)
   variantAttributes ProductVariantAttribute[]
   productImages     ProductImage[]
 
@@ -193,10 +194,10 @@ model ProductImage {
 }
 
 model Cart {
-  id        String     @id @default(uuid()) @db.Uuid
-  userId    String     @unique @map("user_id") @db.Uuid
-  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @unique @map("user_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   user  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   items CartItem[]
@@ -239,4 +240,43 @@ model WishlistItem {
   @@index([userId])
   @@index([productId])
   @@map("wishlist_items")
+}
+
+// ---------------------------------------------------------------------------
+// Address
+//
+// Mutable customer-saved addresses (My Account, checkout selection).
+// Future Order records MUST snapshot these fields at purchase time rather
+// than referencing this row as the permanent delivery address.
+//
+// At most one default address per user is enforced by a PostgreSQL partial
+// unique index created in the migration SQL (Prisma cannot express
+// WHERE is_default = true in @@unique). Do not drop that index in later
+// migrate-dev reviews:
+//   CREATE UNIQUE INDEX "addresses_one_default_per_user_idx"
+//     ON "addresses" ("user_id") WHERE "is_default" = true;
+// ---------------------------------------------------------------------------
+
+model Address {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  fullName     String   @map("full_name") @db.VarChar(200)
+  countryCode  String   @map("country_code") @db.VarChar(8)
+  mobileNumber String   @map("mobile_number") @db.VarChar(20)
+  addressLine1 String   @map("address_line_1") @db.VarChar(255)
+  addressLine2 String?  @map("address_line_2") @db.VarChar(255)
+  city         String   @db.VarChar(100)
+  state        String   @db.VarChar(100)
+  postalCode   String   @map("postal_code") @db.VarChar(20)
+  country      String   @db.VarChar(100)
+  /// Optional free-form label (e.g. Home, Office, Other). Not an enum so it stays extensible.
+  label        String?  @db.VarChar(50)
+  isDefault    Boolean  @default(false) @map("is_default")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("addresses")
 }

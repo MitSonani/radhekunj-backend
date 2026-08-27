@@ -5,6 +5,7 @@ import authRouter from '../../modules/auth/routes.js';
 import catalogRouter from '../../modules/catalog/routes.js';
 import cartRouter from '../../modules/cart/routes.js';
 import wishlistRouter from '../../modules/wishlist/routes.js';
+import addressRouter from '../../modules/addresses/routes.js';
 
 const router = Router();
 
@@ -13,6 +14,7 @@ router.use('/admin', adminRouter);
 router.use('/products', catalogRouter);
 router.use('/cart', cartRouter);
 router.use('/wishlist', wishlistRouter);
+router.use('/addresses', addressRouter);
 
 router.get('/', (_req, res) => {
   res.json({

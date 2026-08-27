@@ -41,6 +41,23 @@ export const PRODUCT_IMAGE = {
   ALLOWED_MIME_TYPES: ALLOWED_IMAGE_MIME_TYPES,
 } as const;
 
+export const ADDRESS = {
+  FULL_NAME_MAX: 200,
+  COUNTRY_CODE_MAX: 8,
+  COUNTRY_CODE_PATTERN: /^\+[1-9]\d{0,3}$/,
+  MOBILE_NUMBER_MIN: 4,
+  MOBILE_NUMBER_MAX: 15,
+  MOBILE_NUMBER_PATTERN: /^\d{4,15}$/,
+  LINE_MAX: 255,
+  CITY_MAX: 100,
+  STATE_MAX: 100,
+  POSTAL_CODE_MIN: 2,
+  POSTAL_CODE_MAX: 20,
+  POSTAL_CODE_PATTERN: /^[A-Za-z0-9][A-Za-z0-9 -]{0,18}[A-Za-z0-9]$/,
+  COUNTRY_MAX: 100,
+  LABEL_MAX: 50,
+} as const;
+
 export const OTP = {
   /** Minimum seconds a user must wait before requesting another OTP for the same identifier. */
   SEND_COOLDOWN_SECONDS: 60,
