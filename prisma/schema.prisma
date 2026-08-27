@@ -21,6 +21,8 @@ model User {
   roleId String? @db.Uuid
   cart   Cart?
 
+  wishlistItems WishlistItem[]
+
   @@map("users")
 }
 
@@ -119,6 +121,8 @@ model Product {
   variants ProductVariant[]
   images   ProductImage[]
 
+  wishlistItems WishlistItem[]
+
   @@index([categoryId])
   @@index([status])
   @@map("products")
@@ -215,4 +219,24 @@ model CartItem {
   @@index([cartId])
   @@index([variantId])
   @@map("cart_items")
+}
+
+// ---------------------------------------------------------------------------
+// Wishlist
+// ---------------------------------------------------------------------------
+
+model WishlistItem {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  productId String   @map("product_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, productId])
+  @@index([userId])
+  @@index([productId])
+  @@map("wishlist_items")
 }
