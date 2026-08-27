@@ -1,7 +1,8 @@
 import 'dotenv/config';
 
 process.env.NODE_ENV = 'test';
-process.env.DATABASE_URL ??= 'postgresql://test:test@localhost:5432/test';
+// Force the test database — always override DATABASE_URL to prevent accidental dev/prod access.
+process.env.DATABASE_URL = 'postgresql://ecommerce_user:ecomerce@localhost:5433/ecommerce_test';
 process.env.CORS_ORIGIN ??= 'http://localhost:3001';
 process.env.JWT_SECRET ??= 'test-jwt-secret';
 process.env.AWS_REGION ??= 'ap-south-1';
