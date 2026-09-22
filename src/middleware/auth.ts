@@ -67,15 +67,17 @@ export async function authenticateJWT(
  * Middleware factory to authorize access based on user roles.
  */
 export function requireRole(allowedRoles: string[]) {
+  const normalizedAllowed = allowedRoles.map((role) => role.trim().toLowerCase());
+
   return (req: Request, _res: Response, next: NextFunction): void => {
     if (!req.user) {
       next(new AppError(401, 'Authentication required'));
       return;
     }
 
-    const userRole = req.user.role?.name;
+    const userRole = req.user.role?.name?.trim().toLowerCase();
 
-    if (!userRole || !allowedRoles.includes(userRole)) {
+    if (!userRole || !normalizedAllowed.includes(userRole)) {
       next(new AppError(403, 'Forbidden: You do not have permission to access this resource'));
       return;
     }

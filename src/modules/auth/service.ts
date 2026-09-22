@@ -5,7 +5,7 @@ import { appConfig } from '../../config/index.js';
 import { setOtp, getOtp, deleteOtp, acquireOtpSendLock, releaseOtpSendLock } from '../../shared/utils/otpStore.js';
 import { addNotificationJob } from '../../shared/utils/queue.js';
 import { isProduction } from '../../config/env.js';
-import { OTP } from '../../shared/constants/index.js';
+import { OTP, ROLES } from '../../shared/constants/index.js';
 
 export const ADMIN_NOT_FOUND_MESSAGE = 'No admin found';
 
@@ -38,7 +38,7 @@ type AuthUser = {
 };
 
 function isAdminRoleName(roleName: string | null | undefined): boolean {
-  return roleName?.trim().toLowerCase() === 'admin';
+  return roleName?.trim().toLowerCase() === ROLES.ADMIN;
 }
 
 async function findAdminByMobileNumber(
@@ -153,7 +153,7 @@ export async function verifyOtp(
     let customerRole = await prisma.role.findFirst({
       where: {
         name: {
-          equals: 'customer',
+          equals: ROLES.CUSTOMER,
           mode: 'insensitive',
         },
       },
@@ -162,7 +162,7 @@ export async function verifyOtp(
     // Create the 'customer' role if not exists
     if (!customerRole) {
       customerRole = await prisma.role.create({
-        data: { name: 'customer' },
+        data: { name: ROLES.CUSTOMER },
       });
     }
 

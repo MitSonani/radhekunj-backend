@@ -67,7 +67,7 @@ type ProductDef = {
 
 // ─── Static seed data ─────────────────────────────────────────────────────────
 
-const ROLES = ['ADMIN', 'CUSTOMER'] as const;
+const ROLES = ['admin', 'customer'] as const;
 type RoleName = (typeof ROLES)[number];
 
 const USERS: Array<{
@@ -76,10 +76,10 @@ const USERS: Array<{
   countryCode: string;
   roleName: RoleName;
 }> = [
-  { name: 'Admin User', mobileNumber: '+919000000001', countryCode: '+91', roleName: 'ADMIN' },
-  { name: 'Priya Sharma', mobileNumber: '+919800000001', countryCode: '+91', roleName: 'CUSTOMER' },
-  { name: 'Rahul Verma', mobileNumber: '+919800000002', countryCode: '+91', roleName: 'CUSTOMER' },
-  { name: 'Sneha Kapoor', mobileNumber: '+919800000003', countryCode: '+91', roleName: 'CUSTOMER' },
+  { name: 'Admin User', mobileNumber: '+919000000001', countryCode: '+91', roleName: 'admin' },
+  { name: 'Priya Sharma', mobileNumber: '+919800000001', countryCode: '+91', roleName: 'customer' },
+  { name: 'Rahul Verma', mobileNumber: '+919800000002', countryCode: '+91', roleName: 'customer' },
+  { name: 'Sneha Kapoor', mobileNumber: '+919800000003', countryCode: '+91', roleName: 'customer' },
 ];
 
 const CATEGORIES: Array<{ name: string; description: string }> = [

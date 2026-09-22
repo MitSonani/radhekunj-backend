@@ -1,6 +1,11 @@
 export const API_VERSION = 'v1';
 export const API_PREFIX = `/api/${API_VERSION}`;
 
+export const ROLES = {
+  ADMIN: 'admin',
+  CUSTOMER: 'customer',
+} as const;
+
 export const PAGINATION = {
   DEFAULT_PAGE: 1,
   DEFAULT_LIMIT: 20,
