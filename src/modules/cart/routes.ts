@@ -3,7 +3,7 @@ import { asyncHandler } from '../../shared/utils/asyncHandler.js';
 import { validateRequest } from '../../shared/utils/validateRequest.js';
 import { authenticateJWT } from '../../middleware/auth.js';
 import * as cartController from './controller.js';
-import { addToCartSchema, cartItemParamSchema, updateCartItemSchema } from './validation.js';
+import { addToCartSchema, applyCouponSchema, cartItemParamSchema, updateCartItemSchema } from './validation.js';
 
 const router = Router();
 
@@ -31,5 +31,13 @@ router.delete(
 );
 
 router.delete('/', asyncHandler(cartController.clearCartHandler));
+
+router.post(
+  '/coupon',
+  validateRequest(applyCouponSchema, 'body'),
+  asyncHandler(cartController.applyCouponHandler),
+);
+
+router.delete('/coupon', asyncHandler(cartController.removeCouponHandler));
 
 export default router;

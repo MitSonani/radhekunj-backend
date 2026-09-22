@@ -11,6 +11,8 @@
  *   - Running `npm run db:seed` twice produces the same deterministic result.
  *
  * Dependency order for deletion (reverse FK graph):
+ *   coupon_usages → coupon_products → coupon_categories → coupons →
+ *   cart_items → carts → wishlist_items → addresses →
  *   product_images → inventory → product_variant_attributes →
  *   product_variants → products → categories →
  *   attribute_values → attributes → users → roles
@@ -18,7 +20,7 @@
  * Seeding order (FK dependency graph):
  *   roles → users → categories → attributes → attribute_values →
  *   products → product_variants → product_variant_attributes →
- *   inventory → product_images
+ *   inventory → product_images → coupons → coupon_products → coupon_categories
  */
 
 import 'dotenv/config';
@@ -313,6 +315,14 @@ const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
  */
 async function clearDevData(): Promise<void> {
   console.log('Clearing existing development data...');
+  await prisma.couponUsage.deleteMany();
+  await prisma.couponProduct.deleteMany();
+  await prisma.couponCategory.deleteMany();
+  await prisma.cartItem.deleteMany();
+  await prisma.cart.deleteMany();
+  await prisma.wishlistItem.deleteMany();
+  await prisma.address.deleteMany();
+  await prisma.coupon.deleteMany();
   await prisma.productImage.deleteMany();
   await prisma.inventory.deleteMany();
   await prisma.productVariantAttribute.deleteMany();
@@ -503,6 +513,77 @@ async function seedProducts(
   console.log(`  ✓ ${totalImages} product images`);
 }
 
+/**
+ * Seeds a small set of fake development coupons. No usage records are created.
+ *
+ * WELCOME10  — 10% off the full cart
+ * MEN20      — 20% off products in the Men category
+ * TSHIRT15   — 15% off Premium Cotton T-Shirt (all variants)
+ */
+async function seedCoupons(categoryIds: Map<string, string>): Promise<void> {
+  const now = new Date();
+  const startsAt = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const expiresAt = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
+
+  await prisma.coupon.create({
+    data: {
+      code: 'WELCOME10',
+      discountType: 'PERCENTAGE',
+      discountValue: 10,
+      scope: 'CART',
+      status: 'ACTIVE',
+      startsAt,
+      expiresAt,
+    },
+  });
+
+  const menCategoryId = categoryIds.get('men');
+  if (!menCategoryId) {
+    throw new Error('Men category not found for MEN20 coupon');
+  }
+
+  await prisma.coupon.create({
+    data: {
+      code: 'MEN20',
+      discountType: 'PERCENTAGE',
+      discountValue: 20,
+      scope: 'CATEGORY',
+      status: 'ACTIVE',
+      startsAt,
+      expiresAt,
+      categories: {
+        create: { categoryId: menCategoryId },
+      },
+    },
+  });
+
+  const tshirt = await prisma.product.findUnique({
+    where: { slug: generateSlug('Premium Cotton T-Shirt') },
+    select: { id: true },
+  });
+
+  if (!tshirt) {
+    throw new Error('Premium Cotton T-Shirt not found for TSHIRT15 coupon');
+  }
+
+  await prisma.coupon.create({
+    data: {
+      code: 'TSHIRT15',
+      discountType: 'PERCENTAGE',
+      discountValue: 15,
+      scope: 'PRODUCT',
+      status: 'ACTIVE',
+      startsAt,
+      expiresAt,
+      products: {
+        create: { productId: tshirt.id },
+      },
+    },
+  });
+
+  console.log('  ✓ 3 coupons (WELCOME10, MEN20, TSHIRT15)');
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -514,6 +595,7 @@ async function main(): Promise<void> {
   const categoryIds = await seedCategories();
   const attrValueIds = await seedAttributes();
   await seedProducts(categoryIds, attrValueIds);
+  await seedCoupons(categoryIds);
 
   console.log('\n✅  Development database seeded successfully.\n');
 }

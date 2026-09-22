@@ -59,6 +59,7 @@ const cartItemVariantSelect = {
       name: true,
       slug: true,
       status: true,
+      categoryId: true,
       images: {
         orderBy: [{ isPrimary: 'desc' as const }, { sortOrder: 'asc' as const }],
         select: {
@@ -88,6 +89,7 @@ const cartItemSelect = {
 const cartSelect = {
   id: true,
   userId: true,
+  couponId: true,
   createdAt: true,
   updatedAt: true,
   items: {
@@ -190,6 +192,17 @@ export async function clearCartItems(
   db: DbClient = prisma,
 ): Promise<void> {
   await db.cartItem.deleteMany({ where: { cartId } });
+}
+
+export async function setCartCouponId(
+  cartId: string,
+  couponId: string | null,
+  db: DbClient = prisma,
+): Promise<void> {
+  await db.cart.update({
+    where: { id: cartId },
+    data: { couponId },
+  });
 }
 
 // ---------------------------------------------------------------------------

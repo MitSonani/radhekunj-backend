@@ -1,6 +1,8 @@
-import { Prisma, ProductStatus, ProductVariantStatus } from '@prisma/client';
+import { CouponDiscountType, CouponScope, Prisma, ProductStatus, ProductVariantStatus } from '@prisma/client';
 import { AppError, NotFoundError } from '../../shared/errors/appError.js';
 import { buildPublicUrl } from '../../shared/services/s3.js';
+import * as couponService from '../coupons/service.js';
+import type { CouponEvaluation } from '../coupons/service.js';
 import * as cartRepository from './repository.js';
 import type { CartItemRecord, CartRecord } from './repository.js';
 
@@ -66,6 +68,17 @@ export type CartItemResponse = {
   updatedAt: Date;
 };
 
+export type CartCouponResponse = {
+  code: string;
+  discountType: CouponDiscountType;
+  discountValue: string;
+  scope: CouponScope;
+  eligibleSubtotal: string;
+  discountAmount: string;
+  eligibleItemIds: string[];
+  ineligibleItemIds: string[];
+};
+
 export type CartResponse = {
   id: string | null;
   items: CartItemResponse[];
@@ -75,6 +88,11 @@ export type CartResponse = {
   totalQuantity: number;
   /** Authoritative subtotal calculated from current variant prices */
   subtotal: string;
+  /** Authoritative coupon discount; "0.00" when no valid coupon is applied */
+  discountAmount: string;
+  /** subtotal - discountAmount. Never negative. Does not include tax or shipping. */
+  finalSubtotal: string;
+  coupon: CartCouponResponse | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -88,6 +106,10 @@ export type AddToCartInput = {
 
 export type UpdateCartItemInput = {
   quantity: number;
+};
+
+export type ApplyCouponInput = {
+  code: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -204,17 +226,33 @@ function toCartItemResponse(item: CartItemRecord): CartItemResponse {
   };
 }
 
-function toCartResponse(cart: CartRecord | null): CartResponse {
-  if (!cart) {
-    return {
-      id: null,
-      items: [],
-      itemsCount: 0,
-      totalQuantity: 0,
-      subtotal: '0.00',
-    };
-  }
+function toCartCouponResponse(evaluation: CouponEvaluation): CartCouponResponse {
+  return {
+    code: evaluation.couponCode,
+    discountType: evaluation.discountType,
+    discountValue: formatMoney(evaluation.discountValue),
+    scope: evaluation.scope,
+    eligibleSubtotal: formatMoney(evaluation.eligibleSubtotal),
+    discountAmount: formatMoney(evaluation.discountAmount),
+    eligibleItemIds: evaluation.eligibleItemIds,
+    ineligibleItemIds: evaluation.ineligibleItemIds,
+  };
+}
 
+function emptyCartResponse(): CartResponse {
+  return {
+    id: null,
+    items: [],
+    itemsCount: 0,
+    totalQuantity: 0,
+    subtotal: '0.00',
+    discountAmount: '0.00',
+    finalSubtotal: '0.00',
+    coupon: null,
+  };
+}
+
+function toCartResponse(cart: CartRecord, evaluation: CouponEvaluation | null = null): CartResponse {
   const items = cart.items.map(toCartItemResponse);
   const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
   const subtotal = cart.items.reduce((acc, item) => {
@@ -222,13 +260,61 @@ function toCartResponse(cart: CartRecord | null): CartResponse {
     return acc.add(lineTotal);
   }, new Prisma.Decimal(0));
 
+  const discountAmount = evaluation?.discountAmount ?? new Prisma.Decimal(0);
+  const finalSubtotal = evaluation?.finalSubtotal ?? subtotal;
+
   return {
     id: cart.id,
     items,
     itemsCount: items.length,
     totalQuantity,
     subtotal: subtotal.toFixed(2),
+    discountAmount: formatMoney(discountAmount),
+    finalSubtotal: formatMoney(finalSubtotal),
+    coupon: evaluation ? toCartCouponResponse(evaluation) : null,
   };
+}
+
+function toCouponLines(cart: CartRecord): couponService.CartLineForCoupon[] {
+  return cart.items.map((item) => couponService.toCartLineForCoupon(item));
+}
+
+/**
+ * Revalidates a stored cart coupon against current prices, stock, and rules.
+ * Clears the stored coupon when it is no longer valid so the cart never
+ * returns a stale discount.
+ */
+async function resolveStoredCoupon(cart: CartRecord, userId: string): Promise<CouponEvaluation | null> {
+  if (!cart.couponId) {
+    return null;
+  }
+
+  if (cart.items.length === 0) {
+    await cartRepository.setCartCouponId(cart.id, null);
+    return null;
+  }
+
+  const evaluation = await couponService.revalidateStoredCoupon(
+    cart.couponId,
+    userId,
+    toCouponLines(cart),
+  );
+
+  if (!evaluation) {
+    await cartRepository.setCartCouponId(cart.id, null);
+    return null;
+  }
+
+  return evaluation;
+}
+
+async function buildCartResponse(cart: CartRecord | null, userId: string): Promise<CartResponse> {
+  if (!cart) {
+    return emptyCartResponse();
+  }
+
+  const evaluation = await resolveStoredCoupon(cart, userId);
+  return toCartResponse(cart, evaluation);
 }
 
 // ---------------------------------------------------------------------------
@@ -277,7 +363,7 @@ function assertSufficientStock(
  */
 export async function getCart(userId: string): Promise<CartResponse> {
   const cart = await cartRepository.findCartByUserId(userId);
-  return toCartResponse(cart);
+  return buildCartResponse(cart, userId);
 }
 
 /**
@@ -352,7 +438,7 @@ export async function addToCart(userId: string, input: AddToCartInput): Promise<
     return refreshed;
   });
 
-  return toCartResponse(cart);
+  return buildCartResponse(cart, userId);
 }
 
 /**
@@ -398,7 +484,7 @@ export async function updateCartItem(
     return refreshed;
   });
 
-  return toCartResponse(cart);
+  return buildCartResponse(cart, userId);
 }
 
 /**
@@ -421,7 +507,7 @@ export async function removeCartItem(userId: string, cartItemId: string): Promis
   await cartRepository.deleteCartItem(cartItemId);
 
   const refreshed = await cartRepository.findCartByUserId(userId);
-  return toCartResponse(refreshed);
+  return buildCartResponse(refreshed, userId);
 }
 
 /**
@@ -432,11 +518,69 @@ export async function clearCart(userId: string): Promise<CartResponse> {
   const cart = await cartRepository.findCartByUserId(userId);
 
   if (!cart) {
-    return toCartResponse(null);
+    return emptyCartResponse();
   }
 
   await cartRepository.clearCartItems(cart.id);
 
+  if (cart.couponId) {
+    await cartRepository.setCartCouponId(cart.id, null);
+  }
+
   const refreshed = await cartRepository.findCartByUserId(userId);
-  return toCartResponse(refreshed);
+  return buildCartResponse(refreshed, userId);
+}
+
+/**
+ * Validates and applies a coupon to the user's cart.
+ *
+ * Applying a coupon does NOT consume usage. Usage is recorded later when an
+ * order is confirmed. The coupon code is persisted on the cart and
+ * revalidated on every subsequent cart read or mutation.
+ *
+ * Only one coupon may be applied. A new coupon replaces the existing one
+ * only after the new coupon validates successfully. An invalid new coupon
+ * leaves the previously applied coupon untouched.
+ */
+export async function applyCoupon(userId: string, input: ApplyCouponInput): Promise<CartResponse> {
+  const cart = await cartRepository.findCartByUserId(userId);
+
+  if (!cart || cart.items.length === 0) {
+    throw new AppError(422, 'Cannot apply a coupon to an empty cart');
+  }
+
+  const evaluation = await couponService.validateCouponForCart({
+    code: input.code,
+    userId,
+    items: toCouponLines(cart),
+  });
+
+  await cartRepository.setCartCouponId(cart.id, evaluation.couponId);
+
+  const refreshed = await cartRepository.findCartByUserId(userId);
+
+  if (!refreshed) {
+    throw new AppError(500, 'Failed to load cart after applying coupon');
+  }
+
+  return toCartResponse(refreshed, evaluation);
+}
+
+/**
+ * Removes the selected coupon from the cart. Does not affect cart items or
+ * coupon usage counts.
+ */
+export async function removeCoupon(userId: string): Promise<CartResponse> {
+  const cart = await cartRepository.findCartByUserId(userId);
+
+  if (!cart) {
+    return emptyCartResponse();
+  }
+
+  if (cart.couponId) {
+    await cartRepository.setCartCouponId(cart.id, null);
+  }
+
+  const refreshed = await cartRepository.findCartByUserId(userId);
+  return buildCartResponse(refreshed, userId);
 }

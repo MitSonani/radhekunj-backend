@@ -41,6 +41,14 @@ export const PRODUCT_IMAGE = {
   ALLOWED_MIME_TYPES: ALLOWED_IMAGE_MIME_TYPES,
 } as const;
 
+export const COUPON = {
+  CODE_MIN: 3,
+  CODE_MAX: 50,
+  SEARCH_MAX: 50,
+  CODE_PATTERN: /^[A-Z0-9]+(?:-[A-Z0-9]+)*$/,
+  MAX_MAPPINGS: 100,
+} as const;
+
 export const ADDRESS = {
   FULL_NAME_MAX: 200,
   COUNTRY_CODE_MAX: 8,

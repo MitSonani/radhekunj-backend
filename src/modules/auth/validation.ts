@@ -11,3 +11,9 @@ export const verifyOtpSchema = z.object({
   otp: z.string().length(6, 'OTP must be exactly 6 digits'),
   name: z.string().trim().min(1, 'Name cannot be empty').optional(),
 });
+
+export const verifyAdminOtpSchema = z.object({
+  countryCode: z.string().optional(),
+  mobileNumber: z.string().min(4, 'Mobile number must be at least 4 digits'),
+  otp: z.string().length(6, 'OTP must be exactly 6 digits'),
+});

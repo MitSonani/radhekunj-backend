@@ -84,8 +84,12 @@ async function seedVariant(opts: {
 // ---------------------------------------------------------------------------
 
 async function cleanDatabase() {
+  await prisma.couponUsage.deleteMany({});
+  await prisma.couponProduct.deleteMany({});
+  await prisma.couponCategory.deleteMany({});
   await prisma.cartItem.deleteMany({});
   await prisma.cart.deleteMany({});
+  await prisma.coupon.deleteMany({});
   await prisma.inventory.deleteMany({});
   await prisma.productVariantAttribute.deleteMany({});
   await prisma.productVariant.deleteMany({});

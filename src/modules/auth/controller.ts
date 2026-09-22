@@ -58,3 +58,51 @@ export async function verifyOtpHandler(req: Request, res: Response): Promise<voi
 
   res.status(HTTP_STATUS.OK).json(response);
 }
+
+/**
+ * Admin login: send OTP only when an admin already exists for this number.
+ */
+export async function sendAdminOtpHandler(req: Request, res: Response): Promise<void> {
+  const { countryCode, mobileNumber } = req.body as {
+    countryCode?: string;
+    mobileNumber: string;
+  };
+
+  const identifier = `${countryCode || ''}${mobileNumber}`;
+  const otp = await authService.sendAdminOtp(identifier, { countryCode, mobileNumber });
+
+  const response: ApiResponse = {
+    success: true,
+    message: 'OTP sent successfully',
+    data: {
+      ...(otp ? { otp } : {}),
+    },
+  };
+
+  res.status(HTTP_STATUS.OK).json(response);
+}
+
+/**
+ * Admin login: verify OTP for an existing admin. Never creates a user.
+ */
+export async function verifyAdminOtpHandler(req: Request, res: Response): Promise<void> {
+  const { countryCode, mobileNumber, otp } = req.body as {
+    countryCode?: string;
+    mobileNumber: string;
+    otp: string;
+  };
+
+  const identifier = `${countryCode || ''}${mobileNumber}`;
+  const data = await authService.verifyAdminOtp(identifier, otp, {
+    countryCode,
+    mobileNumber,
+  });
+
+  const response: ApiResponse = {
+    success: true,
+    data,
+    message: 'Authentication successful',
+  };
+
+  res.status(HTTP_STATUS.OK).json(response);
+}

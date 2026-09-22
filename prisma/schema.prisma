@@ -23,6 +23,7 @@ model User {
 
   wishlistItems WishlistItem[]
   addresses     Address[]
+  couponUsages  CouponUsage[]
 
   @@map("users")
 }
@@ -57,7 +58,8 @@ model Category {
   createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz
   updatedAt   DateTime       @updatedAt @map("updated_at") @db.Timestamptz
 
-  products Product[]
+  products         Product[]
+  couponCategories CouponCategory[]
 
   @@index([status])
   @@map("categories")
@@ -122,7 +124,8 @@ model Product {
   variants ProductVariant[]
   images   ProductImage[]
 
-  wishlistItems WishlistItem[]
+  wishlistItems  WishlistItem[]
+  couponProducts CouponProduct[]
 
   @@index([categoryId])
   @@index([status])
@@ -196,12 +199,16 @@ model ProductImage {
 model Cart {
   id        String   @id @default(uuid()) @db.Uuid
   userId    String   @unique @map("user_id") @db.Uuid
+  /// Selected coupon for this cart. Revalidated on every pricing read; not a pricing snapshot.
+  couponId  String?  @map("coupon_id") @db.Uuid
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  user  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  items CartItem[]
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  coupon Coupon? @relation(fields: [couponId], references: [id], onDelete: SetNull)
+  items  CartItem[]
 
+  @@index([couponId])
   @@map("carts")
 }
 
@@ -279,4 +286,123 @@ model Address {
 
   @@index([userId])
   @@map("addresses")
+}
+
+// ---------------------------------------------------------------------------
+// Coupons
+//
+// A Coupon is a promotional rule. Discount is never trusted from the client:
+// the backend recalculates eligibility and amount on every pricing operation
+// (cart read, apply, future checkout/order).
+//
+// Minimum-order qualification uses the FULL cart subtotal (all line items,
+// including items that are not coupon-eligible). Discount is then calculated
+// only on eligible, available line items.
+//
+// Applying a coupon to a cart does NOT consume usage. CouponUsage rows are
+// written only when an order is successfully created (see consumeCouponUsage).
+// orderId is nullable until the Order module exists; no fake order IDs.
+// ---------------------------------------------------------------------------
+
+enum CouponDiscountType {
+  PERCENTAGE
+  FIXED_AMOUNT
+
+  @@map("coupon_discount_type")
+}
+
+enum CouponScope {
+  CART
+  PRODUCT
+  CATEGORY
+
+  @@map("coupon_scope")
+}
+
+enum CouponStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("coupon_status")
+}
+
+model Coupon {
+  id               String             @id @default(uuid()) @db.Uuid
+  /// Stored normalized (trimmed, uppercase). Unique and case-insensitive by convention.
+  code             String             @unique @db.VarChar(50)
+  discountType     CouponDiscountType @map("discount_type")
+  /// PERCENTAGE: 0 < value <= 100. FIXED_AMOUNT: value > 0. Enforced by DB CHECKs.
+  discountValue    Decimal            @map("discount_value") @db.Decimal(12, 2)
+  scope            CouponScope
+  /// Full cart subtotal must be >= this amount. Discount still uses eligible items only.
+  minimumCartValue Decimal?           @map("minimum_cart_value") @db.Decimal(12, 2)
+  /// Cap on the calculated discount. Null means no cap.
+  maximumDiscount  Decimal?           @map("maximum_discount") @db.Decimal(12, 2)
+  startsAt         DateTime           @map("starts_at") @db.Timestamptz
+  expiresAt        DateTime           @map("expires_at") @db.Timestamptz
+  /// Null means unlimited total redemptions.
+  usageLimit       Int?               @map("usage_limit")
+  /// Null means no per-user cap.
+  perUserLimit     Int?               @map("per_user_limit")
+  status           CouponStatus       @default(ACTIVE)
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime           @updatedAt @map("updated_at") @db.Timestamptz
+
+  products   CouponProduct[]
+  categories CouponCategory[]
+  usages     CouponUsage[]
+  carts      Cart[]
+
+  @@index([status])
+  @@index([startsAt, expiresAt])
+  @@map("coupons")
+}
+
+model CouponProduct {
+  id        String @id @default(uuid()) @db.Uuid
+  couponId  String @map("coupon_id") @db.Uuid
+  productId String @map("product_id") @db.Uuid
+
+  coupon  Coupon  @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([couponId, productId])
+  @@index([productId])
+  @@map("coupon_products")
+}
+
+model CouponCategory {
+  id         String @id @default(uuid()) @db.Uuid
+  couponId   String @map("coupon_id") @db.Uuid
+  categoryId String @map("category_id") @db.Uuid
+
+  coupon   Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([couponId, categoryId])
+  @@index([categoryId])
+  @@map("coupon_categories")
+}
+
+/// Successful coupon redemption. Written at order confirmation, never at cart apply.
+model CouponUsage {
+  id             String   @id @default(uuid()) @db.Uuid
+  couponId       String   @map("coupon_id") @db.Uuid
+  userId         String   @map("user_id") @db.Uuid
+  /// Nullable until the Order module exists. Future orders should set this and
+  /// add an FK. Partial unique (coupon_id, order_id) WHERE order_id IS NOT NULL
+  /// is created in the migration SQL.
+  orderId        String?  @map("order_id") @db.Uuid
+  discountAmount Decimal  @map("discount_amount") @db.Decimal(12, 2)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  coupon Coupon @relation(fields: [couponId], references: [id], onDelete: Restrict)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([couponId])
+  @@index([userId])
+  @@index([couponId, userId])
+  @@index([orderId])
+  @@map("coupon_usages")
 }

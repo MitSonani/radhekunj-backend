@@ -77,3 +77,29 @@ export async function clearCartHandler(req: Request, res: Response): Promise<voi
 
   res.status(HTTP_STATUS.OK).json(response);
 }
+
+export async function applyCouponHandler(req: Request, res: Response): Promise<void> {
+  const userId = requireAuthUser(req);
+  const cart = await cartService.applyCoupon(userId, req.body as cartService.ApplyCouponInput);
+
+  const response: ApiResponse = {
+    success: true,
+    data: cart,
+    message: 'Coupon applied',
+  };
+
+  res.status(HTTP_STATUS.OK).json(response);
+}
+
+export async function removeCouponHandler(req: Request, res: Response): Promise<void> {
+  const userId = requireAuthUser(req);
+  const cart = await cartService.removeCoupon(userId);
+
+  const response: ApiResponse = {
+    success: true,
+    data: cart,
+    message: 'Coupon removed',
+  };
+
+  res.status(HTTP_STATUS.OK).json(response);
+}

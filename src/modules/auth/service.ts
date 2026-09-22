@@ -1,11 +1,13 @@
 import jwt from 'jsonwebtoken';
 import { prisma } from '../../database/prisma.js';
-import { AppError, RateLimitError } from '../../shared/errors/appError.js';
+import { AppError, NotFoundError, RateLimitError } from '../../shared/errors/appError.js';
 import { appConfig } from '../../config/index.js';
 import { setOtp, getOtp, deleteOtp, acquireOtpSendLock, releaseOtpSendLock } from '../../shared/utils/otpStore.js';
 import { addNotificationJob } from '../../shared/utils/queue.js';
 import { isProduction } from '../../config/env.js';
 import { OTP } from '../../shared/constants/index.js';
+
+export const ADMIN_NOT_FOUND_MESSAGE = 'No admin found';
 
 interface SendOtpDetails {
   countryCode?: string;
@@ -16,6 +18,51 @@ interface VerifyOtpDetails {
   name?: string;
   countryCode?: string;
   mobileNumber: string;
+}
+
+const AUTH_USER_SELECT = {
+  id: true,
+  name: true,
+  role: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
+} as const;
+
+type AuthUser = {
+  id: string;
+  name: string;
+  role: { id: string; name: string } | null;
+};
+
+function isAdminRoleName(roleName: string | null | undefined): boolean {
+  return roleName?.trim().toLowerCase() === 'admin';
+}
+
+async function findAdminByMobileNumber(
+  mobileNumber: string,
+  countryCode?: string,
+): Promise<AuthUser | null> {
+  const candidates = [...new Set([mobileNumber, `${countryCode || ''}${mobileNumber}`].filter(Boolean))];
+
+  const user = await prisma.user.findFirst({
+    where: { mobileNumber: { in: candidates } },
+    select: AUTH_USER_SELECT,
+  });
+
+  if (!user || !isAdminRoleName(user.role?.name)) {
+    return null;
+  }
+
+  return user;
+}
+
+function issueSessionToken(userId: string): string {
+  return jwt.sign({ id: userId }, appConfig.jwtSecret || '', {
+    expiresIn: '1d',
+  });
 }
 
 /**
@@ -97,16 +144,7 @@ export async function verifyOtp(
   // Find user by unique mobile number
   let user = await prisma.user.findUnique({
     where: { mobileNumber: details.mobileNumber },
-    select: {
-      id: true,
-      name: true,
-      role: {
-        select: {
-          id: true,
-          name: true,
-        },
-      },
-    },
+    select: AUTH_USER_SELECT,
   });
 
   // If user does not exist, auto-register them
@@ -135,28 +173,57 @@ export async function verifyOtp(
         countryCode: details.countryCode || null,
         roleId: customerRole.id,
       },
-      select: {
-        id: true,
-        name: true,
-        role: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
-      },
+      select: AUTH_USER_SELECT,
     });
 
     user = newUser;
   }
 
-  // Generate JWT token
-  const token = jwt.sign({ id: user.id }, appConfig.jwtSecret || '', {
-    expiresIn: '1d',
-  });
-
   return {
     user,
-    token,
+    token: issueSessionToken(user.id),
+  };
+}
+
+/**
+ * Admin login OTP. Sends a code only when an admin already exists for the number.
+ * Never creates users.
+ */
+export async function sendAdminOtp(
+  identifier: string,
+  details: SendOtpDetails,
+): Promise<string | undefined> {
+  const admin = await findAdminByMobileNumber(details.mobileNumber, details.countryCode);
+  if (!admin) {
+    throw new NotFoundError(ADMIN_NOT_FOUND_MESSAGE);
+  }
+
+  return sendOtp(identifier, details);
+}
+
+/**
+ * Admin login OTP verification. Existing admins only — never registers a user.
+ */
+export async function verifyAdminOtp(
+  identifier: string,
+  otp: string,
+  details: Pick<VerifyOtpDetails, 'countryCode' | 'mobileNumber'>,
+) {
+  const cachedOtp = await getOtp(identifier);
+
+  if (!cachedOtp || cachedOtp !== otp) {
+    throw new AppError(400, 'Invalid or expired OTP');
+  }
+
+  const admin = await findAdminByMobileNumber(details.mobileNumber, details.countryCode);
+  if (!admin) {
+    throw new NotFoundError(ADMIN_NOT_FOUND_MESSAGE);
+  }
+
+  await deleteOtp(identifier);
+
+  return {
+    user: admin,
+    token: issueSessionToken(admin.id),
   };
 }
