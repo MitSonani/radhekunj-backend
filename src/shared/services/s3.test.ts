@@ -2,11 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 import {
   assertObjectExists,
+  buildPublicUrl,
   createPresignedUploadUrl,
   isManagedCategoryImageKey,
   isManagedProductImageKey,
   parseProductImageKey,
 } from './s3.js';
+import { appConfig } from '../../config/index.js';
 import { HTTP_STATUS } from '../constants/index.js';
 import { AppError } from '../errors/appError.js';
 
@@ -106,6 +108,24 @@ describe('createPresignedUploadUrl', () => {
       }),
     );
   });
+
+  it('throws AppError when S3 is not configured', async () => {
+    const originalBucket = appConfig.s3.bucket;
+    try {
+      appConfig.s3.bucket = undefined;
+      await expect(
+        createPresignedUploadUrl({
+          contentType: 'image/jpeg',
+          fileSize: 1024,
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 500,
+        message: 'File storage is not configured',
+      });
+    } finally {
+      appConfig.s3.bucket = originalBucket;
+    }
+  });
 });
 
 describe('assertObjectExists', () => {
@@ -114,5 +134,34 @@ describe('assertObjectExists', () => {
       statusCode: HTTP_STATUS.BAD_REQUEST,
       message: 'Invalid image key',
     } satisfies Partial<AppError>);
+  });
+});
+
+describe('buildPublicUrl', () => {
+  it('returns S3 public URL when S3 is fully configured', () => {
+    const url = buildPublicUrl(VALID_IMAGE_KEY);
+    expect(url).toBe(`https://test-category-images.s3.ap-south-1.amazonaws.com/${VALID_IMAGE_KEY}`);
+  });
+
+  it('returns publicBaseUrl when publicBaseUrl is configured', () => {
+    const originalBase = appConfig.s3.publicBaseUrl;
+    try {
+      appConfig.s3.publicBaseUrl = 'https://cdn.example.com';
+      const url = buildPublicUrl(VALID_IMAGE_KEY);
+      expect(url).toBe(`https://cdn.example.com/${VALID_IMAGE_KEY}`);
+    } finally {
+      appConfig.s3.publicBaseUrl = originalBase;
+    }
+  });
+
+  it('returns deterministic picsum placeholder fallback when S3 is not configured', () => {
+    const originalRegion = appConfig.s3.region;
+    try {
+      appConfig.s3.region = undefined;
+      const url = buildPublicUrl(VALID_IMAGE_KEY);
+      expect(url).toMatch(/^https:\/\/picsum.photos\/seed\//);
+    } finally {
+      appConfig.s3.region = originalRegion;
+    }
   });
 });

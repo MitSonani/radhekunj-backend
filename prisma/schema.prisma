@@ -24,6 +24,7 @@ model User {
   wishlistItems WishlistItem[]
   addresses     Address[]
   couponUsages  CouponUsage[]
+  orders        Order[]
 
   @@map("users")
 }
@@ -126,6 +127,7 @@ model Product {
 
   wishlistItems  WishlistItem[]
   couponProducts CouponProduct[]
+  orderItems     OrderItem[]
 
   @@index([categoryId])
   @@index([status])
@@ -146,6 +148,7 @@ model ProductVariant {
   attributes ProductVariantAttribute[]
   inventory  Inventory?
   cartItems  CartItem[]
+  orderItems OrderItem[]
 
   @@index([productId])
   @@map("product_variants")
@@ -188,24 +191,27 @@ model ProductImage {
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  product        Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
-  attributeValue AttributeValue? @relation(fields: [attributeValueId], references: [id], onDelete: Restrict)
+  product        Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  attributeValue AttributeValue? @relation(fields: [attributeValueId], references: [id], onDelete: SetNull)
 
   @@index([productId])
   @@index([attributeValueId])
   @@map("product_images")
 }
 
+// ---------------------------------------------------------------------------
+// Cart
+// ---------------------------------------------------------------------------
+
 model Cart {
   id        String   @id @default(uuid()) @db.Uuid
   userId    String   @unique @map("user_id") @db.Uuid
-  /// Selected coupon for this cart. Revalidated on every pricing read; not a pricing snapshot.
   couponId  String?  @map("coupon_id") @db.Uuid
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  coupon Coupon? @relation(fields: [couponId], references: [id], onDelete: SetNull)
+  user   User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  coupon Coupon?    @relation(fields: [couponId], references: [id], onDelete: SetNull)
   items  CartItem[]
 
   @@index([couponId])
@@ -251,17 +257,6 @@ model WishlistItem {
 
 // ---------------------------------------------------------------------------
 // Address
-//
-// Mutable customer-saved addresses (My Account, checkout selection).
-// Future Order records MUST snapshot these fields at purchase time rather
-// than referencing this row as the permanent delivery address.
-//
-// At most one default address per user is enforced by a PostgreSQL partial
-// unique index created in the migration SQL (Prisma cannot express
-// WHERE is_default = true in @@unique). Do not drop that index in later
-// migrate-dev reviews:
-//   CREATE UNIQUE INDEX "addresses_one_default_per_user_idx"
-//     ON "addresses" ("user_id") WHERE "is_default" = true;
 // ---------------------------------------------------------------------------
 
 model Address {
@@ -276,7 +271,6 @@ model Address {
   state        String   @db.VarChar(100)
   postalCode   String   @map("postal_code") @db.VarChar(20)
   country      String   @db.VarChar(100)
-  /// Optional free-form label (e.g. Home, Office, Other). Not an enum so it stays extensible.
   label        String?  @db.VarChar(50)
   isDefault    Boolean  @default(false) @map("is_default")
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
@@ -290,18 +284,6 @@ model Address {
 
 // ---------------------------------------------------------------------------
 // Coupons
-//
-// A Coupon is a promotional rule. Discount is never trusted from the client:
-// the backend recalculates eligibility and amount on every pricing operation
-// (cart read, apply, future checkout/order).
-//
-// Minimum-order qualification uses the FULL cart subtotal (all line items,
-// including items that are not coupon-eligible). Discount is then calculated
-// only on eligible, available line items.
-//
-// Applying a coupon to a cart does NOT consume usage. CouponUsage rows are
-// written only when an order is successfully created (see consumeCouponUsage).
-// orderId is nullable until the Order module exists; no fake order IDs.
 // ---------------------------------------------------------------------------
 
 enum CouponDiscountType {
@@ -328,21 +310,15 @@ enum CouponStatus {
 
 model Coupon {
   id               String             @id @default(uuid()) @db.Uuid
-  /// Stored normalized (trimmed, uppercase). Unique and case-insensitive by convention.
   code             String             @unique @db.VarChar(50)
   discountType     CouponDiscountType @map("discount_type")
-  /// PERCENTAGE: 0 < value <= 100. FIXED_AMOUNT: value > 0. Enforced by DB CHECKs.
   discountValue    Decimal            @map("discount_value") @db.Decimal(12, 2)
   scope            CouponScope
-  /// Full cart subtotal must be >= this amount. Discount still uses eligible items only.
   minimumCartValue Decimal?           @map("minimum_cart_value") @db.Decimal(12, 2)
-  /// Cap on the calculated discount. Null means no cap.
   maximumDiscount  Decimal?           @map("maximum_discount") @db.Decimal(12, 2)
   startsAt         DateTime           @map("starts_at") @db.Timestamptz
   expiresAt        DateTime           @map("expires_at") @db.Timestamptz
-  /// Null means unlimited total redemptions.
   usageLimit       Int?               @map("usage_limit")
-  /// Null means no per-user cap.
   perUserLimit     Int?               @map("per_user_limit")
   status           CouponStatus       @default(ACTIVE)
   createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz
@@ -384,14 +360,10 @@ model CouponCategory {
   @@map("coupon_categories")
 }
 
-/// Successful coupon redemption. Written at order confirmation, never at cart apply.
 model CouponUsage {
   id             String   @id @default(uuid()) @db.Uuid
   couponId       String   @map("coupon_id") @db.Uuid
   userId         String   @map("user_id") @db.Uuid
-  /// Nullable until the Order module exists. Future orders should set this and
-  /// add an FK. Partial unique (coupon_id, order_id) WHERE order_id IS NOT NULL
-  /// is created in the migration SQL.
   orderId        String?  @map("order_id") @db.Uuid
   discountAmount Decimal  @map("discount_amount") @db.Decimal(12, 2)
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
@@ -399,10 +371,167 @@ model CouponUsage {
 
   coupon Coupon @relation(fields: [couponId], references: [id], onDelete: Restrict)
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order  Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
 
   @@index([couponId])
   @@index([userId])
   @@index([couponId, userId])
   @@index([orderId])
   @@map("coupon_usages")
+}
+
+// ---------------------------------------------------------------------------
+// Orders
+// ---------------------------------------------------------------------------
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+
+  @@map("order_status")
+}
+
+model Order {
+  id              String      @id @default(uuid()) @db.Uuid
+  orderNumber     String      @unique @map("order_number") @db.VarChar(64)
+  idempotencyKey  String?     @unique @map("idempotency_key") @db.VarChar(128)
+  userId          String      @map("user_id") @db.Uuid
+  status          OrderStatus @default(PENDING_PAYMENT)
+  subtotal        Decimal     @db.Decimal(12, 2)
+  discountAmount  Decimal     @default(0) @map("discount_amount") @db.Decimal(12, 2)
+  shippingFee     Decimal     @default(0) @map("shipping_fee") @db.Decimal(12, 2)
+  taxAmount       Decimal     @default(0) @map("tax_amount") @db.Decimal(12, 2)
+  totalAmount     Decimal     @map("total_amount") @db.Decimal(12, 2)
+  /// Immutable snapshot of the delivery address at purchase time
+  shippingAddress Json        @map("shipping_address") @db.JsonB
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime    @updatedAt @map("updated_at") @db.Timestamptz
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  items        OrderItem[]
+  couponUsages CouponUsage[]
+  payments     Payment[]
+  shipments    Shipment[]
+
+  @@index([userId])
+  @@index([orderNumber])
+  @@index([status])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id          String   @id @default(uuid()) @db.Uuid
+  orderId     String   @map("order_id") @db.Uuid
+  productId   String   @map("product_id") @db.Uuid
+  variantId   String   @map("variant_id") @db.Uuid
+  sku         String   @db.VarChar(64)
+  productName String   @map("product_name") @db.VarChar(200)
+  /// Immutable snapshot of variant attributes at purchase time (e.g. [{ name: "Size", value: "M" }])
+  attributes  Json     @db.JsonB
+  unitPrice   Decimal  @map("unit_price") @db.Decimal(12, 2)
+  quantity    Int
+  lineTotal   Decimal  @map("line_total") @db.Decimal(12, 2)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  order   Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product        @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([productId])
+  @@index([variantId])
+  @@map("order_items")
+}
+
+// ---------------------------------------------------------------------------
+// Payments
+// ---------------------------------------------------------------------------
+
+enum PaymentMethod {
+  COD
+  RAZORPAY
+
+  @@map("payment_method")
+}
+
+enum PaymentStatus {
+  PENDING
+  AUTHORIZED
+  PAID
+  FAILED
+  CANCELLED
+  REFUNDED
+
+  @@map("payment_status")
+}
+
+model Payment {
+  id                String        @id @default(uuid()) @db.Uuid
+  orderId           String        @map("order_id") @db.Uuid
+  paymentMethod     PaymentMethod @map("payment_method")
+  paymentStatus     PaymentStatus @default(PENDING) @map("payment_status")
+  amount            Decimal       @db.Decimal(12, 2)
+  currency          String        @default("INR") @db.VarChar(10)
+  provider          String?       @db.VarChar(50)
+  providerOrderId   String?       @map("provider_order_id") @db.VarChar(128)
+  providerPaymentId String?       @unique @map("provider_payment_id") @db.VarChar(128)
+  providerSignature String?       @map("provider_signature") @db.VarChar(255)
+  paidAt            DateTime?     @map("paid_at") @db.Timestamptz
+  failureReason     String?       @map("failure_reason") @db.VarChar(500)
+  metadata          Json?         @db.JsonB
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([providerOrderId])
+  @@index([paymentStatus])
+  @@map("payments")
+}
+
+
+// ---------------------------------------------------------------------------
+// Shipments
+// ---------------------------------------------------------------------------
+
+enum ShipmentStatus {
+  NOT_BOOKED
+  BOOKED
+  PICKED_UP
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+
+  @@map("shipment_status")
+}
+
+model Shipment {
+  id                 String         @id @default(uuid()) @db.Uuid
+  orderId            String         @map("order_id") @db.Uuid
+  provider           String         @default("SHIPROCKET") @db.VarChar(50)
+  status             ShipmentStatus @default(NOT_BOOKED)
+  trackingNumber     String?        @map("tracking_number") @db.VarChar(100)
+  providerShipmentId String?        @map("provider_shipment_id") @db.VarChar(100)
+  providerOrderId    String?        @map("provider_order_id") @db.VarChar(100)
+  courierName        String?        @map("courier_name") @db.VarChar(100)
+  trackingUrl        String?        @map("tracking_url") @db.VarChar(500)
+  bookedAt           DateTime?      @map("booked_at") @db.Timestamptz
+  shippedAt          DateTime?      @map("shipped_at") @db.Timestamptz
+  deliveredAt        DateTime?      @map("delivered_at") @db.Timestamptz
+  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime       @updatedAt @map("updated_at") @db.Timestamptz
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([trackingNumber])
+  @@index([status])
+  @@map("shipments")
 }

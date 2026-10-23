@@ -133,3 +133,53 @@ export async function remove(id: string): Promise<CategoryRecord> {
     select: categorySelect,
   });
 }
+
+export const publicCategorySelect = {
+  id: true,
+  name: true,
+  slug: true,
+  description: true,
+  imageUrl: true,
+} satisfies Prisma.CategorySelect;
+
+export type PublicCategoryRecord = Prisma.CategoryGetPayload<{ select: typeof publicCategorySelect }>;
+
+export async function findPublicCategories(
+  page: number = 1,
+  limit: number = 50,
+  search?: string,
+): Promise<PublicCategoryRecord[]> {
+  const where: Prisma.CategoryWhereInput = {
+    status: CategoryStatus.ACTIVE,
+  };
+
+  if (search?.trim()) {
+    where.name = {
+      contains: search.trim(),
+      mode: "insensitive",
+    };
+  }
+
+  return prisma.category.findMany({
+    where,
+    skip: getPaginationOffset(page, limit),
+    take: limit,
+    orderBy: { name: "asc" },
+    select: publicCategorySelect,
+  });
+}
+
+export async function countPublicCategories(search?: string): Promise<number> {
+  const where: Prisma.CategoryWhereInput = {
+    status: CategoryStatus.ACTIVE,
+  };
+
+  if (search?.trim()) {
+    where.name = {
+      contains: search.trim(),
+      mode: "insensitive",
+    };
+  }
+
+  return prisma.category.count({ where });
+}

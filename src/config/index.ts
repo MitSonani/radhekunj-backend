@@ -20,4 +20,9 @@ export const appConfig = {
     bucket: env.AWS_S3_BUCKET,
     publicBaseUrl: env.AWS_S3_PUBLIC_BASE_URL,
   },
+  razorpay: {
+    keyId: env.RAZORPAY_KEY_ID,
+    keySecret: env.RAZORPAY_KEY_SECRET,
+    webhookSecret: env.RAZORPAY_WEBHOOK_SECRET,
+  },
 };

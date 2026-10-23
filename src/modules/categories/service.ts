@@ -241,3 +241,19 @@ export async function createCategoryImageUploadUrl(input: {
 }) {
   return createPresignedUploadUrl(input);
 }
+
+export async function listPublicCategories(
+  page: number = 1,
+  limit: number = 50,
+  search?: string,
+): Promise<{ categories: categoryRepository.PublicCategoryRecord[]; pagination: PaginationMeta }> {
+  const [categories, total] = await Promise.all([
+    categoryRepository.findPublicCategories(page, limit, search),
+    categoryRepository.countPublicCategories(search),
+  ]);
+
+  return {
+    categories,
+    pagination: buildPaginationMeta(page, limit, total),
+  };
+}

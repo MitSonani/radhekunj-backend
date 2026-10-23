@@ -72,3 +72,9 @@ export const uploadUrlSchema = z.object({
     .positive('File size must be greater than 0')
     .max(CATEGORY_IMAGE.MAX_BYTES, `Image cannot exceed ${CATEGORY_IMAGE.MAX_BYTES} bytes`),
 });
+
+export const listPublicCategoriesQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(PAGINATION.DEFAULT_PAGE),
+  limit: z.coerce.number().int().min(1).max(PAGINATION.MAX_LIMIT).default(50),
+  search: z.string().trim().max(100).optional(),
+});

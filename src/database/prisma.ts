@@ -6,6 +6,13 @@ import { logger } from '../shared/utils/logger.js';
 
 const pool = new pg.Pool({
   connectionString: env.DATABASE_URL,
+  max: 20,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+});
+
+pool.on('error', (err) => {
+  logger.error('Unexpected error on idle database client', { error: err.message });
 });
 
 const adapter = new PrismaPg(pool);

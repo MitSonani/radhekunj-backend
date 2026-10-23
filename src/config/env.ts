@@ -12,6 +12,9 @@ const envSchema = z.object({
   AWS_SECRET_ACCESS_KEY: z.string().min(1).optional(),
   AWS_S3_BUCKET: z.string().min(1).optional(),
   AWS_S3_PUBLIC_BASE_URL: z.string().url().optional(),
+  RAZORPAY_KEY_ID: z.string().min(1).optional(),
+  RAZORPAY_KEY_SECRET: z.string().min(1).optional(),
+  RAZORPAY_WEBHOOK_SECRET: z.string().min(1).optional(),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
