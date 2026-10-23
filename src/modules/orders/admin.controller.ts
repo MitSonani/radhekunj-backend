@@ -109,3 +109,19 @@ export async function updatePaymentStatusHandler(req: Request, res: Response): P
 
   res.status(HTTP_STATUS.OK).json(response);
 }
+
+export async function retryRefundHandler(req: Request, res: Response): Promise<void> {
+  const id = req.params["id"] as string;
+  const refundId = req.params["refundId"] as string;
+
+  const { retryRefund } = await import("../payments/refundService.js");
+  const refund = await retryRefund(id, refundId);
+
+  const response: ApiResponse = {
+    success: true,
+    data: refund,
+    message: "Refund retry initiated successfully",
+  };
+
+  res.status(HTTP_STATUS.OK).json(response);
+}

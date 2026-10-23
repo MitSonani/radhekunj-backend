@@ -80,3 +80,13 @@ router.patch(
 );
 
 export default router;
+
+/**
+ * POST /admin/orders/:id/refunds/:refundId/retry
+ * Retries a failed refund for an order.
+ */
+router.post(
+  "/:id/refunds/:refundId/retry",
+  validateRequest(orderIdParamSchema, "params"),
+  asyncHandler(adminOrderController.retryRefundHandler),
+);

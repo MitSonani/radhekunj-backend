@@ -2,7 +2,16 @@ import jwt from 'jsonwebtoken';
 import { prisma } from '../../database/prisma.js';
 import { AppError, NotFoundError, RateLimitError } from '../../shared/errors/appError.js';
 import { appConfig } from '../../config/index.js';
-import { setOtp, getOtp, deleteOtp, acquireOtpSendLock, releaseOtpSendLock } from '../../shared/utils/otpStore.js';
+import {
+  setOtp,
+  getOtp,
+  deleteOtp,
+  acquireOtpSendLock,
+  releaseOtpSendLock,
+  isIdentifierLocked,
+  recordFailedOtpAttempt,
+  clearOtpAttempts,
+} from '../../shared/utils/otpStore.js';
 import { addNotificationJob } from '../../shared/utils/queue.js';
 import { isProduction } from '../../config/env.js';
 import { OTP, ROLES } from '../../shared/constants/index.js';
@@ -125,6 +134,7 @@ export async function sendOtp(identifier: string, details: SendOtpDetails): Prom
 
 /**
  * Verifies an OTP code. Automatically registers a user if they do not exist.
+ * Enforces attempt tracking and temporary lockout against brute force.
  * @returns The logged-in/signed-up user and their JWT session token.
  */
 export async function verifyOtp(
@@ -132,14 +142,31 @@ export async function verifyOtp(
   otp: string,
   details: VerifyOtpDetails,
 ) {
+  const lockStatus = await isIdentifierLocked(identifier);
+  if (lockStatus.locked) {
+    const mins = Math.ceil((lockStatus.retryAfterSeconds ?? 900) / 60);
+    throw new AppError(
+      429,
+      `Too many failed verification attempts. Account is locked. Please try again in ${mins} minutes.`,
+    );
+  }
+
   const cachedOtp = await getOtp(identifier);
 
   if (!cachedOtp || cachedOtp !== otp) {
+    const attemptResult = await recordFailedOtpAttempt(identifier);
+    if (attemptResult.maxReached) {
+      throw new AppError(
+        429,
+        'Maximum verification attempts exceeded. Account is locked for 15 minutes.',
+      );
+    }
     throw new AppError(400, 'Invalid or expired OTP');
   }
 
-  // Delete OTP upon successful verification (one-time use)
+  // Delete OTP and clear attempts on successful verification
   await deleteOtp(identifier);
+  await clearOtpAttempts(identifier);
 
   // Find user by unique mobile number
   let user = await prisma.user.findUnique({
@@ -209,9 +236,25 @@ export async function verifyAdminOtp(
   otp: string,
   details: Pick<VerifyOtpDetails, 'countryCode' | 'mobileNumber'>,
 ) {
+  const lockStatus = await isIdentifierLocked(identifier);
+  if (lockStatus.locked) {
+    const mins = Math.ceil((lockStatus.retryAfterSeconds ?? 900) / 60);
+    throw new AppError(
+      429,
+      `Too many failed verification attempts. Account is locked. Please try again in ${mins} minutes.`,
+    );
+  }
+
   const cachedOtp = await getOtp(identifier);
 
   if (!cachedOtp || cachedOtp !== otp) {
+    const attemptResult = await recordFailedOtpAttempt(identifier);
+    if (attemptResult.maxReached) {
+      throw new AppError(
+        429,
+        'Maximum verification attempts exceeded. Account is locked for 15 minutes.',
+      );
+    }
     throw new AppError(400, 'Invalid or expired OTP');
   }
 
@@ -221,6 +264,7 @@ export async function verifyAdminOtp(
   }
 
   await deleteOtp(identifier);
+  await clearOtpAttempts(identifier);
 
   return {
     user: admin,

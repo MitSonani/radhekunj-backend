@@ -47,6 +47,19 @@ export const paymentSelect = {
   updatedAt: true,
 } satisfies Prisma.PaymentSelect;
 
+export const refundSelect = {
+  id: true,
+  orderId: true,
+  paymentId: true,
+  amount: true,
+  currency: true,
+  status: true,
+  gatewayRefundId: true,
+  failureReason: true,
+  createdAt: true,
+  updatedAt: true,
+} satisfies Prisma.RefundSelect;
+
 export const shipmentSelect = {
   id: true,
   orderId: true,
@@ -83,6 +96,14 @@ export const orderSelect = {
   taxAmount: true,
   totalAmount: true,
   shippingAddress: true,
+  expiresAt: true,
+  taxBreakdown: true,
+  shippingDetails: true,
+  refunds: {
+    orderBy: { createdAt: "desc" as const },
+    select: refundSelect,
+  },
+
   createdAt: true,
   updatedAt: true,
   user: {
@@ -109,6 +130,7 @@ export const orderSelect = {
 export type OrderRecord = Prisma.OrderGetPayload<{ select: typeof orderSelect }>;
 export type OrderItemRecord = Prisma.OrderItemGetPayload<{ select: typeof orderItemSelect }>;
 export type ShipmentRecord = Prisma.ShipmentGetPayload<{ select: typeof shipmentSelect }>;
+export type RefundRecord = Prisma.RefundGetPayload<{ select: typeof refundSelect }>;
 
 // ---------------------------------------------------------------------------
 // Queries
@@ -288,6 +310,10 @@ export interface CreateOrderData {
   taxAmount: Prisma.Decimal;
   totalAmount: Prisma.Decimal;
   shippingAddress: Prisma.InputJsonValue;
+  expiresAt?: Date | null;
+  taxBreakdown?: Prisma.InputJsonValue;
+  shippingDetails?: Prisma.InputJsonValue;
+
   items: Array<{
     productId: string;
     variantId: string;
@@ -316,6 +342,9 @@ export async function createOrder(
       taxAmount: data.taxAmount,
       totalAmount: data.totalAmount,
       shippingAddress: data.shippingAddress,
+      expiresAt: data.expiresAt ?? null,
+      taxBreakdown: data.taxBreakdown ?? undefined,
+      shippingDetails: data.shippingDetails ?? undefined,
       items: {
         create: data.items.map((item) => ({
           productId: item.productId,
@@ -452,5 +481,81 @@ export async function lockInventoryRows(
   const sorted = Array.from(new Set(variantIds)).sort();
   for (const variantId of sorted) {
     await db.$queryRaw`SELECT id FROM inventory WHERE variant_id = ${variantId}::uuid FOR UPDATE`;
+  }
+}
+
+
+// ---------------------------------------------------------------------------
+// Inventory & Coupon Integrity Helpers
+// ---------------------------------------------------------------------------
+
+export async function reserveInventory(
+  items: Array<{ variantId: string; quantity: number }>,
+  tx: Prisma.TransactionClient,
+): Promise<void> {
+  for (const item of items) {
+    await tx.inventory.update({
+      where: { variantId: item.variantId },
+      data: {
+        reservedQuantity: { increment: item.quantity },
+      },
+    });
+  }
+}
+
+export async function commitReservedInventory(
+  items: Array<{ variantId: string; quantity: number }>,
+  tx: Prisma.TransactionClient,
+): Promise<void> {
+  for (const item of items) {
+    await tx.inventory.update({
+      where: { variantId: item.variantId },
+      data: {
+        quantity: { decrement: item.quantity },
+        reservedQuantity: { decrement: item.quantity },
+      },
+    });
+  }
+}
+
+export async function releaseReservedInventory(
+  items: Array<{ variantId: string; quantity: number }>,
+  tx: Prisma.TransactionClient,
+): Promise<void> {
+  for (const item of items) {
+    await tx.inventory.update({
+      where: { variantId: item.variantId },
+      data: {
+        reservedQuantity: { decrement: item.quantity },
+      },
+    });
+  }
+}
+
+export async function restoreCommittedInventory(
+  items: Array<{ variantId: string; quantity: number }>,
+  tx: Prisma.TransactionClient,
+): Promise<void> {
+  for (const item of items) {
+    await tx.inventory.update({
+      where: { variantId: item.variantId },
+      data: {
+        quantity: { increment: item.quantity },
+      },
+    });
+  }
+}
+
+export async function rollbackCouponUsage(
+  orderId: string,
+  tx: Prisma.TransactionClient,
+): Promise<void> {
+  const usage = await tx.couponUsage.findFirst({
+    where: { orderId },
+  });
+  if (usage) {
+    await tx.couponUsage.delete({
+      where: { id: usage.id },
+    });
   }
 }

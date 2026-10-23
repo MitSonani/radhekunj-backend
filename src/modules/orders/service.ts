@@ -1,3 +1,7 @@
+import { prisma } from "../../database/prisma.js";
+import { calculateFinancials } from "../financial/service.js";
+import { scheduleOrderExpiry } from "./expiryQueue.js";
+import { createRefundRecord, processRefund } from "../payments/refundService.js";
 import crypto from "crypto";
 import { Prisma, OrderStatus, PaymentMethod, PaymentStatus, ShipmentStatus } from "@prisma/client";
 import { AppError, NotFoundError } from "../../shared/errors/appError.js";
@@ -138,6 +142,19 @@ export function toOrderResponse(record: orderRepository.OrderRecord): OrderRespo
 
   const shipments = record.shipments ? record.shipments.map(toShipmentResponse) : [];
   const activeShipment = shipments.find((s) => s.status !== "CANCELLED") ?? shipments[0];
+  const refunds = (record.refunds || []).map((r) => ({
+    id: r.id,
+    orderId: r.orderId,
+    paymentId: r.paymentId,
+    amount: r.amount.toFixed(2),
+    currency: r.currency,
+    status: r.status,
+    gatewayRefundId: r.gatewayRefundId,
+    failureReason: r.failureReason,
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+  }));
+
   const customerShipment: CustomerShipmentResponse | undefined = activeShipment
     ? {
         id: activeShipment.id,
@@ -164,6 +181,10 @@ export function toOrderResponse(record: orderRepository.OrderRecord): OrderRespo
     paymentMethod: primaryPayment?.paymentMethod,
     paymentStatus: primaryPayment?.paymentStatus,
     payments,
+    expiresAt: record.expiresAt,
+    taxBreakdown: (record.taxBreakdown as Record<string, unknown>) ?? null,
+    shippingDetails: (record.shippingDetails as Record<string, unknown>) ?? null,
+    refunds,
     shipment: customerShipment,
     shipments,
     items: record.items.map((item) => ({
@@ -286,8 +307,8 @@ export async function placeOrder(
         where: { variantId: item.variantId },
       });
 
-      if (!inv || inv.quantity < item.quantity) {
-        const available = inv ? inv.quantity : 0;
+      const available = inv ? inv.quantity - inv.reservedQuantity : 0;
+      if (!inv || available < item.quantity) {
         throw new AppError(
           422,
           `Insufficient stock for SKU "${item.variant.sku}". Requested ${item.quantity}, available ${available}`,
@@ -338,34 +359,50 @@ export async function placeOrder(
       couponIdToConsume = evaluation.couponId;
     }
 
-    const shippingFee = new Prisma.Decimal(0);
-    const taxAmount = new Prisma.Decimal(0);
-    const totalAmount = subtotal.sub(discountAmount).add(shippingFee).add(taxAmount);
+    const financials = await calculateFinancials({
+      subtotal: Number(subtotal),
+      discountAmount: Number(discountAmount),
+      shippingAddress: {
+        state: addressSnapshot.state,
+      },
+    });
 
-    try {
-      for (const item of cart.items) {
-        await tx.inventory.update({
-          where: { variantId: item.variantId },
-          data: {
-            quantity: { decrement: item.quantity },
-          },
-        });
+    const shippingFee = new Prisma.Decimal(financials.shippingFee);
+    const taxAmount = new Prisma.Decimal(financials.taxAmount);
+    const totalAmount = new Prisma.Decimal(financials.totalAmount);
+
+    const isOnlinePayment = chosenPaymentMethod === PaymentMethod.RAZORPAY;
+    const initialOrderStatus: OrderStatus = isOnlinePayment
+      ? OrderStatus.PENDING_PAYMENT
+      : OrderStatus.CONFIRMED;
+
+    const expiresAt = isOnlinePayment ? new Date(Date.now() + 15 * 60 * 1000) : null;
+
+    if (isOnlinePayment) {
+      // Online order: atomically reserve inventory for 15 minutes
+      await orderRepository.reserveInventory(cart.items, tx);
+    } else {
+      // COD: commit physical stock immediately
+      try {
+        for (const item of cart.items) {
+          await tx.inventory.update({
+            where: { variantId: item.variantId },
+            data: {
+              quantity: { decrement: item.quantity },
+            },
+          });
+        }
+      } catch (err: unknown) {
+        if (
+          err instanceof Error &&
+          (err.message.includes("inventory_quantity_nonnegative") ||
+            err.message.includes("check constraint"))
+        ) {
+          throw new AppError(422, "Insufficient stock to fulfill this order");
+        }
+        throw err;
       }
-    } catch (err: unknown) {
-      if (
-        err instanceof Error &&
-        (err.message.includes("inventory_quantity_nonnegative") ||
-          err.message.includes("check constraint"))
-      ) {
-        throw new AppError(422, "Insufficient stock to fulfill this order");
-      }
-      throw err;
     }
-
-    const initialOrderStatus: OrderStatus =
-      chosenPaymentMethod === PaymentMethod.COD
-        ? OrderStatus.CONFIRMED
-        : OrderStatus.PENDING_PAYMENT;
 
     const orderNumber = generateOrderNumber();
     const order = await orderRepository.createOrder(
@@ -380,6 +417,9 @@ export async function placeOrder(
         taxAmount,
         totalAmount,
         shippingAddress: addressSnapshot,
+        expiresAt,
+        taxBreakdown: financials.taxBreakdown as unknown as Prisma.InputJsonValue,
+        shippingDetails: financials.shippingDetails as unknown as Prisma.InputJsonValue,
         items: orderItemsData,
       },
       tx,
@@ -439,6 +479,12 @@ export async function placeOrder(
 
     return orderResponse;
   });
+
+  if (chosenPaymentMethod === PaymentMethod.RAZORPAY) {
+    await scheduleOrderExpiry(orderResponse.id, 15 * 60 * 1000);
+  }
+
+  return orderResponse;
 }
 
 export async function getUserOrders(
@@ -516,21 +562,128 @@ export async function updateOrderStatus(
   orderId: string,
   nextStatus: OrderStatus,
 ): Promise<AdminOrderDetailResponse> {
-  const order = await orderRepository.findOrderById(orderId);
-  if (!order) {
+  const existingOrder = await orderRepository.findOrderById(orderId);
+  if (!existingOrder) {
     throw new NotFoundError("Order not found");
   }
 
-  if (order.status === nextStatus) {
-    return toAdminOrderDetailResponse(order);
+  if (existingOrder.status === nextStatus) {
+    return toAdminOrderDetailResponse(existingOrder);
   }
 
-  const allowedTransitions = VALID_ORDER_STATUS_TRANSITIONS[order.status] || [];
+  // Guardrail: Cannot cancel already dispatched or delivered orders
+  if (
+    nextStatus === OrderStatus.CANCELLED &&
+    (existingOrder.status === OrderStatus.SHIPPED || existingOrder.status === OrderStatus.DELIVERED)
+  ) {
+    throw new AppError(400, "Cannot cancel an order that has already been shipped or delivered");
+  }
+
+  const allowedTransitions = VALID_ORDER_STATUS_TRANSITIONS[existingOrder.status] || [];
   if (!allowedTransitions.includes(nextStatus)) {
     throw new AppError(
       400,
-      `Cannot transition order status from ${order.status} to ${nextStatus}. Valid transitions: [${allowedTransitions.join(", ")}]`,
+      `Cannot transition order status from ${existingOrder.status} to ${nextStatus}. Valid transitions: [${allowedTransitions.join(", ")}]`,
     );
+  }
+
+  // Safe cancellation with inventory & refund lifecycle
+  if (nextStatus === OrderStatus.CANCELLED) {
+    let refundToProcessId: string | null = null;
+
+    await prisma.$transaction(async (tx) => {
+      // Row lock to ensure isolation
+      const lockedRows = await tx.$queryRaw<Array<{ id: string; status: OrderStatus }>>`
+        SELECT id, status FROM orders WHERE id = ${orderId}::uuid FOR UPDATE
+      `;
+      if (!lockedRows || lockedRows.length === 0) {
+        throw new NotFoundError("Order not found");
+      }
+      const current = lockedRows[0];
+      if (!current) throw new NotFoundError("Order not found");
+      if (current.status === OrderStatus.CANCELLED) {
+        return; // Idempotent no-op
+      }
+
+      const items = await tx.orderItem.findMany({
+        where: { orderId },
+        select: { variantId: true, quantity: true },
+      });
+
+      if (current.status === OrderStatus.CONFIRMED) {
+        // Order was confirmed: physical stock was committed -> restore committed stock
+        await orderRepository.restoreCommittedInventory(items, tx);
+      } else if (current.status === OrderStatus.PENDING_PAYMENT) {
+        // Order was pending payment: stock was reserved -> release reservation
+        await orderRepository.releaseReservedInventory(items, tx);
+      }
+
+      // Roll back coupon usage if used on this order
+      await orderRepository.rollbackCouponUsage(orderId, tx);
+
+      // Check payments
+      const paidPayment = await tx.payment.findFirst({
+        where: { orderId, paymentStatus: PaymentStatus.PAID },
+      });
+
+      if (paidPayment) {
+        if (paidPayment.paymentMethod === PaymentMethod.RAZORPAY) {
+          const existingRefund = await tx.refund.findFirst({
+            where: { paymentId: paidPayment.id },
+          });
+
+          if (!existingRefund) {
+            const refundRec = await createRefundRecord(
+              {
+                orderId,
+                paymentId: paidPayment.id,
+                amount: existingOrder.totalAmount,
+                currency: "INR",
+              },
+              tx,
+            );
+            refundToProcessId = refundRec.id;
+          } else if (existingRefund.status === "PENDING") {
+            refundToProcessId = existingRefund.id;
+          }
+        } else {
+          // COD or other: mark payment CANCELLED
+          await tx.payment.update({
+            where: { id: paidPayment.id },
+            data: { paymentStatus: PaymentStatus.CANCELLED },
+          });
+        }
+      } else {
+        // Pending payments: mark CANCELLED
+        await tx.payment.updateMany({
+          where: { orderId, paymentStatus: PaymentStatus.PENDING },
+          data: {
+            paymentStatus: PaymentStatus.CANCELLED,
+            failureReason: "Order cancelled by administrator",
+          },
+        });
+      }
+
+      // Update order status to CANCELLED and clear expiresAt
+      await tx.order.update({
+        where: { id: orderId },
+        data: {
+          status: OrderStatus.CANCELLED,
+          expiresAt: null,
+        },
+      });
+    });
+
+    // Out-of-transaction: trigger refund processing
+    if (refundToProcessId) {
+      await processRefund(refundToProcessId);
+    }
+
+    const refreshed = await orderRepository.findOrderById(orderId);
+    if (!refreshed) {
+      throw new NotFoundError("Order not found");
+    }
+    return toAdminOrderDetailResponse(refreshed);
   }
 
   const updatedOrder = await orderRepository.updateOrderStatus(orderId, nextStatus);

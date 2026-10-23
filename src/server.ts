@@ -6,6 +6,7 @@ import { connectDatabase, disconnectDatabase } from './database/prisma.js';
 import { connectRedis, disconnectRedis } from './database/redis.js';
 import { logger } from './shared/utils/logger.js';
 import { startNotificationWorker, stopNotificationWorker } from './shared/utils/queue.js';
+import { startOrderExpiryWorker, stopOrderExpiryWorker, reconcileExpiredOrders } from './modules/orders/expiryQueue.js';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -16,6 +17,8 @@ async function startServer(): Promise<void> {
   await connectDatabase();
   await connectRedis();
   startNotificationWorker();
+  startOrderExpiryWorker();
+  void reconcileExpiredOrders();
 
   const app = createApp();
   server = createServer(app);
@@ -57,6 +60,7 @@ async function shutdown(signal: string): Promise<void> {
       logger.info('HTTP server closed');
     }
 
+    await stopOrderExpiryWorker();
     await stopNotificationWorker();
     await disconnectRedis();
     await disconnectDatabase();

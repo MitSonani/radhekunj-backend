@@ -207,3 +207,156 @@ export async function _clearOtpSendLocksForTest(): Promise<void> {
     }
   }
 }
+
+export const OTP_SECURITY = {
+  MAX_VERIFY_ATTEMPTS: 5,
+  LOCKOUT_SECONDS: 900, // 15 minutes
+} as const;
+
+const OTP_ATTEMPTS_PREFIX = 'otp:attempts:';
+const OTP_LOCKOUT_PREFIX = 'otp:lockout:';
+
+const inMemoryAttempts = new Map<string, { count: number; expiresAt: number }>();
+const inMemoryLockouts = new Map<string, number>();
+
+/**
+ * Checks whether the identifier is currently locked out due to excessive failed attempts.
+ */
+export async function isIdentifierLocked(
+  identifier: string,
+): Promise<{ locked: boolean; retryAfterSeconds?: number }> {
+  const lockoutKey = `${OTP_LOCKOUT_PREFIX}${identifier}`;
+  const redis = getRedisClient();
+
+  if (redis) {
+    try {
+      const ttl = await redis.ttl(lockoutKey);
+      if (ttl > 0) {
+        return { locked: true, retryAfterSeconds: ttl };
+      }
+      return { locked: false };
+    } catch (error) {
+      logger.error('Redis error checking OTP lockout, falling back to memory', {
+        identifier,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  const now = Date.now();
+  const expiresAt = inMemoryLockouts.get(lockoutKey);
+  if (expiresAt !== undefined && now < expiresAt) {
+    const retryAfterSeconds = Math.ceil((expiresAt - now) / 1000);
+    return { locked: true, retryAfterSeconds };
+  }
+
+  if (expiresAt !== undefined && now >= expiresAt) {
+    inMemoryLockouts.delete(lockoutKey);
+  }
+
+  return { locked: false };
+}
+
+/**
+ * Atomically records a failed OTP verification attempt.
+ * If MAX_VERIFY_ATTEMPTS is reached, locks the identifier for LOCKOUT_SECONDS and deletes the OTP.
+ */
+export async function recordFailedOtpAttempt(
+  identifier: string,
+): Promise<{ attempts: number; maxReached: boolean; retryAfterSeconds?: number }> {
+  const attemptsKey = `${OTP_ATTEMPTS_PREFIX}${identifier}`;
+  const lockoutKey = `${OTP_LOCKOUT_PREFIX}${identifier}`;
+  const redis = getRedisClient();
+
+  if (redis) {
+    try {
+      const attempts = await redis.incr(attemptsKey);
+      if (attempts === 1) {
+        await redis.expire(attemptsKey, OTP_SECURITY.LOCKOUT_SECONDS);
+      }
+
+      if (attempts >= OTP_SECURITY.MAX_VERIFY_ATTEMPTS) {
+        await redis.set(lockoutKey, '1', 'EX', OTP_SECURITY.LOCKOUT_SECONDS);
+        await deleteOtp(identifier);
+        return {
+          attempts,
+          maxReached: true,
+          retryAfterSeconds: OTP_SECURITY.LOCKOUT_SECONDS,
+        };
+      }
+
+      return { attempts, maxReached: false };
+    } catch (error) {
+      logger.error('Redis error recording OTP attempt, falling back to memory', {
+        identifier,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  // In-memory fallback
+  const now = Date.now();
+  const existing = inMemoryAttempts.get(attemptsKey);
+  const currentCount = (existing && now < existing.expiresAt) ? existing.count + 1 : 1;
+
+  inMemoryAttempts.set(attemptsKey, {
+    count: currentCount,
+    expiresAt: now + OTP_SECURITY.LOCKOUT_SECONDS * 1000,
+  });
+
+  if (currentCount >= OTP_SECURITY.MAX_VERIFY_ATTEMPTS) {
+    inMemoryLockouts.set(lockoutKey, now + OTP_SECURITY.LOCKOUT_SECONDS * 1000);
+    await deleteOtp(identifier);
+    return {
+      attempts: currentCount,
+      maxReached: true,
+      retryAfterSeconds: OTP_SECURITY.LOCKOUT_SECONDS,
+    };
+  }
+
+  return { attempts: currentCount, maxReached: false };
+}
+
+/**
+ * Clears failed verification attempts and lockout upon successful verification.
+ */
+export async function clearOtpAttempts(identifier: string): Promise<void> {
+  const attemptsKey = `${OTP_ATTEMPTS_PREFIX}${identifier}`;
+  const lockoutKey = `${OTP_LOCKOUT_PREFIX}${identifier}`;
+  const redis = getRedisClient();
+
+  if (redis) {
+    try {
+      await redis.del(attemptsKey, lockoutKey);
+      return;
+    } catch (error) {
+      logger.error('Redis error clearing OTP attempts, falling back to memory', {
+        identifier,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  inMemoryAttempts.delete(attemptsKey);
+  inMemoryLockouts.delete(lockoutKey);
+}
+
+/**
+ * Clears all attempts and lockouts. FOR TESTING ONLY.
+ */
+export async function _clearOtpAttemptsForTest(): Promise<void> {
+  inMemoryAttempts.clear();
+  inMemoryLockouts.clear();
+
+  const redis = getRedisClient();
+  if (redis) {
+    try {
+      const keys = await redis.keys(`${OTP_ATTEMPTS_PREFIX}*`);
+      const lockKeys = await redis.keys(`${OTP_LOCKOUT_PREFIX}*`);
+      const all = [...keys, ...lockKeys];
+      if (all.length > 0) {
+        await redis.del(...all);
+      }
+    } catch {}
+  }
+}

@@ -19,6 +19,19 @@ export interface OrderItemResponse {
   updatedAt: Date;
 }
 
+export interface RefundResponse {
+  id: string;
+  orderId: string;
+  paymentId: string;
+  amount: string;
+  currency: string;
+  status: 'PENDING' | 'PROCESSED' | 'FAILED';
+  gatewayRefundId: string | null;
+  failureReason: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface CustomerShipmentResponse {
   id: string;
   status: ShipmentStatus;
@@ -61,6 +74,11 @@ export interface OrderResponse {
   paymentMethod?: PaymentMethod;
   paymentStatus?: PaymentStatus;
   payments?: PaymentResponse[];
+  expiresAt?: Date | null;
+  taxBreakdown?: Record<string, unknown> | null;
+  shippingDetails?: Record<string, unknown> | null;
+  refunds?: RefundResponse[];
+
   shipment?: CustomerShipmentResponse;
   shipments?: ShipmentResponse[];
   razorpay?: {

@@ -230,13 +230,34 @@ export async function verifyRazorpayPayment(
       });
     }
 
-    // Update order status to CONFIRMED
-    await tx.order.update({
-      where: { id: order.id },
-      data: {
-        status: OrderStatus.CONFIRMED,
-      },
-    });
+    // Row-lock the order to prevent race conditions with expiration worker
+    const lockedRows = await tx.$queryRaw<Array<{ id: string; status: OrderStatus }>>`
+      SELECT id, status FROM orders WHERE id = ${order.id}::uuid FOR UPDATE
+    `;
+    const orderRow = lockedRows[0];
+
+    // Idempotency: if already confirmed, do not commit stock twice
+    if (orderRow && orderRow.status === OrderStatus.CONFIRMED) {
+      return targetPayment;
+    }
+
+    if (orderRow && orderRow.status === OrderStatus.PENDING_PAYMENT) {
+      const items = await tx.orderItem.findMany({
+        where: { orderId: order.id },
+        select: { variantId: true, quantity: true },
+      });
+      // Atomically convert reservation into committed stock
+      await orderRepository.commitReservedInventory(items, tx);
+
+      // Update order status to CONFIRMED and clear expiresAt
+      await tx.order.update({
+        where: { id: order.id },
+        data: {
+          status: OrderStatus.CONFIRMED,
+          expiresAt: null,
+        },
+      });
+    }
 
     return targetPayment;
   });
@@ -315,10 +336,21 @@ export async function handleRazorpayWebhook(
             },
           });
 
-          await tx.order.update({
-            where: { id: paymentRecord.orderId },
-            data: { status: OrderStatus.CONFIRMED },
-          });
+          const lockedRows = await tx.$queryRaw<Array<{ id: string; status: OrderStatus }>>`
+            SELECT id, status FROM orders WHERE id = ${paymentRecord.orderId}::uuid FOR UPDATE
+          `;
+          const orderRow = lockedRows[0];
+          if (orderRow && orderRow.status === OrderStatus.PENDING_PAYMENT) {
+            const items = await tx.orderItem.findMany({
+              where: { orderId: paymentRecord.orderId },
+              select: { variantId: true, quantity: true },
+            });
+            await orderRepository.commitReservedInventory(items, tx);
+            await tx.order.update({
+              where: { id: paymentRecord.orderId },
+              data: { status: OrderStatus.CONFIRMED, expiresAt: null },
+            });
+          }
         } else if (orderIdNote) {
           const order = await tx.order.findUnique({ where: { id: orderIdNote } });
           if (order) {
@@ -336,10 +368,21 @@ export async function handleRazorpayWebhook(
               },
             });
 
-            await tx.order.update({
-              where: { id: order.id },
-              data: { status: OrderStatus.CONFIRMED },
-            });
+            const lockedRows = await tx.$queryRaw<Array<{ id: string; status: OrderStatus }>>`
+              SELECT id, status FROM orders WHERE id = ${order.id}::uuid FOR UPDATE
+            `;
+            const orderRow = lockedRows[0];
+            if (orderRow && orderRow.status === OrderStatus.PENDING_PAYMENT) {
+              const items = await tx.orderItem.findMany({
+                where: { orderId: order.id },
+                select: { variantId: true, quantity: true },
+              });
+              await orderRepository.commitReservedInventory(items, tx);
+              await tx.order.update({
+                where: { id: order.id },
+                data: { status: OrderStatus.CONFIRMED, expiresAt: null },
+              });
+            }
           }
         }
       });
