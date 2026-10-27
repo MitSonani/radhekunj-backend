@@ -27,3 +27,18 @@ export const applyCouponSchema = z.object({
     .min(1, 'code is required')
     .max(COUPON.CODE_MAX, `code must be at most ${COUPON.CODE_MAX} characters`),
 });
+
+export const mergeCartSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        variantId: z.string({ required_error: 'variantId is required' }).uuid('Invalid variant ID format'),
+        quantity: z
+          .number({ required_error: 'quantity is required' })
+          .int('quantity must be an integer')
+          .min(1, 'quantity must be at least 1')
+          .max(99, 'quantity cannot exceed 99'),
+      }),
+    )
+    .max(50, 'Cannot merge more than 50 items'),
+});

@@ -3,17 +3,13 @@ import { Redis } from 'ioredis';
 import { env } from '../../config/env.js';
 import { logger } from './logger.js';
 import { getSmsProvider, maskPhoneNumber } from '../services/sms/index.js';
+import { getWhatsAppProvider } from '../services/whatsapp/index.js';
 
 const QUEUE_NAME = 'notification-queue';
 
 let notificationQueue: Queue | null = null;
 let notificationWorker: Worker | null = null;
 
-/**
- * Creates a dedicated connection for BullMQ.
- * BullMQ requires dedicated connections (cannot be shared with general command clients)
- * because workers and events block.
- */
 function createBullRedisConnection(): Redis | null {
   if (!env.REDIS_URL) {
     return null;
@@ -60,6 +56,26 @@ export async function addNotificationJob(
   }
 
   // Fallback if Redis is unconfigured or failed to write: dispatch directly
+  if (name === 'send_whatsapp_otp' || (name === 'send_otp' && process.env['OTP_DELIVERY_CHANNEL'] === 'whatsapp')) {
+    const waProvider = getWhatsAppProvider();
+    const result = await waProvider.sendOtp({
+      to: data.identifier,
+      otp: data.otp,
+      countryCode: data.countryCode,
+    });
+
+    if (!result.success) {
+      logger.error('[WHATSAPP FALLBACK] Failed to dispatch OTP', { to: maskedPhone, error: result.error });
+      throw new Error(`Failed to deliver WhatsApp OTP: ${result.error}`);
+    }
+
+    logger.info('[WHATSAPP FALLBACK] Dispatched WhatsApp OTP via provider', {
+      to: maskedPhone,
+      provider: result.provider,
+    });
+    return;
+  }
+
   if (name === 'send_otp') {
     const smsProvider = getSmsProvider();
     const result = await smsProvider.sendOtp({
@@ -87,12 +103,7 @@ export async function addNotificationJob(
  * Starts the notification worker to process queued SMS/WhatsApp jobs.
  */
 export function startNotificationWorker(): void {
-  if (!env.REDIS_URL) {
-    logger.info('Notification worker not started: Redis not configured');
-    return;
-  }
-
-  if (notificationWorker) {
+  if (!env.REDIS_URL || notificationWorker) {
     return;
   }
 
@@ -104,14 +115,41 @@ export function startNotificationWorker(): void {
   notificationWorker = new Worker(
     QUEUE_NAME,
     async (job: Job) => {
-      if (job.name === 'send_otp') {
-        const { identifier, otp, countryCode } = job.data as {
-          identifier: string;
-          otp: string;
-          countryCode?: string;
-        };
+      const { identifier, otp, countryCode } = job.data as {
+        identifier: string;
+        otp: string;
+        countryCode?: string;
+      };
 
-        const masked = maskPhoneNumber(`${countryCode || ''}${identifier}`);
+      const masked = maskPhoneNumber(`${countryCode || ''}${identifier}`);
+
+      if (job.name === 'send_whatsapp_otp' || (job.name === 'send_otp' && process.env['OTP_DELIVERY_CHANNEL'] === 'whatsapp')) {
+        logger.info('[WHATSAPP WORKER] Processing WhatsApp OTP delivery job', { to: masked });
+
+        const waProvider = getWhatsAppProvider();
+        const result = await waProvider.sendOtp({
+          to: identifier,
+          otp,
+          countryCode,
+        });
+
+        if (!result.success) {
+          logger.error('[WHATSAPP WORKER] Provider failed to deliver WhatsApp OTP', {
+            to: masked,
+            error: result.error,
+          });
+          throw new Error(`WhatsApp Provider error: ${result.error}`);
+        }
+
+        logger.info('[WHATSAPP WORKER] WhatsApp OTP successfully delivered via provider', {
+          to: masked,
+          provider: result.provider,
+          messageId: result.messageId,
+        });
+        return;
+      }
+
+      if (job.name === 'send_otp') {
         logger.info('[SMS WORKER] Processing OTP delivery job', { to: masked });
 
         const smsProvider = getSmsProvider();
@@ -152,9 +190,6 @@ export function startNotificationWorker(): void {
   logger.info('Notification worker started');
 }
 
-/**
- * Gracefully shuts down the worker.
- */
 export async function stopNotificationWorker(): Promise<void> {
   if (notificationWorker) {
     await notificationWorker.close();

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/require-await, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { MockSmsProvider } from './mockProvider.js';
 import { Fast2SmsProvider } from './fast2smsProvider.js';

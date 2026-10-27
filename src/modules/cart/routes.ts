@@ -3,13 +3,19 @@ import { asyncHandler } from '../../shared/utils/asyncHandler.js';
 import { validateRequest } from '../../shared/utils/validateRequest.js';
 import { authenticateJWT } from '../../middleware/auth.js';
 import * as cartController from './controller.js';
-import { addToCartSchema, applyCouponSchema, cartItemParamSchema, updateCartItemSchema } from './validation.js';
+import { addToCartSchema, applyCouponSchema, cartItemParamSchema, updateCartItemSchema, mergeCartSchema } from './validation.js';
 
 const router = Router();
 
 router.use(asyncHandler(authenticateJWT));
 
 router.get('/', asyncHandler(cartController.getCartHandler));
+
+router.post(
+  '/merge',
+  validateRequest(mergeCartSchema, 'body'),
+  asyncHandler(cartController.mergeCartHandler),
+);
 
 router.post(
   '/items',

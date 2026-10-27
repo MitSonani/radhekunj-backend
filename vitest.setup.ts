@@ -23,6 +23,7 @@ appConfig.s3.secretAccessKey = 'test-secret-key';
 appConfig.s3.bucket = 'test-category-images';
 
 beforeEach(async () => {
+  await prisma.banner.deleteMany().catch(() => {});
   await prisma.refund.deleteMany().catch(() => {});
   await prisma.storeSetting.deleteMany().catch(() => {});
   await prisma.shipment.deleteMany().catch(() => {});

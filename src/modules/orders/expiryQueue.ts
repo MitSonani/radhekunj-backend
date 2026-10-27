@@ -1,10 +1,9 @@
 import { Queue, Worker, Job } from "bullmq";
 import { Redis } from "ioredis";
-import { OrderStatus, PaymentStatus, Prisma } from "@prisma/client";
+import { OrderStatus, PaymentStatus, PaymentMethod } from "@prisma/client";
 import { prisma } from "../../database/prisma.js";
 import { env } from "../../config/env.js";
 import { logger } from "../../shared/utils/logger.js";
-import * as orderRepository from "./repository.js";
 
 const ORDER_EXPIRY_QUEUE_NAME = "order-expiry-queue";
 
@@ -79,10 +78,23 @@ export async function expireOrderIfPending(orderId: string): Promise<{
 
     const orderRow = lockedRows[0];
     if (!orderRow || orderRow.status !== OrderStatus.PENDING_PAYMENT) {
-      return { expired: false, reason: `ALREADY_${orderRow.status}` };
+      return { expired: false, reason: `ALREADY_${orderRow?.status || "UNKNOWN"}` };
     }
 
-    // 2. Double-check payment status under transaction: never cancel if payment was already captured
+    // 2. Defensive guard: Never expire COD orders through this workflow
+    const codPayment = await tx.payment.findFirst({
+      where: {
+        orderId,
+        paymentMethod: PaymentMethod.COD,
+      },
+    });
+
+    if (codPayment) {
+      logger.warn("Order expiry skipped: COD orders are immune to reservation expiry", { orderId });
+      return { expired: false, reason: "COD_ORDER_IMMUNE" };
+    }
+
+    // 3. Double-check payment status under transaction: never cancel if payment was already captured
     const paidPayment = await tx.payment.findFirst({
       where: {
         orderId,

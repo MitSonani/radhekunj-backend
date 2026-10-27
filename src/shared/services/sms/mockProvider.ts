@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/require-await */
 import { logger } from '../../utils/logger.js';
 import { SmsProvider, SendOtpOptions, SendOtpResult, maskPhoneNumber } from './types.js';
 

@@ -3,7 +3,7 @@ import { DeleteObjectCommand, HeadObjectCommand, S3Client } from '@aws-sdk/clien
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 import { appConfig } from '../../config/index.js';
 import { AppError } from '../errors/appError.js';
-import { ALLOWED_IMAGE_MIME_TYPES, CATEGORY_IMAGE, PRODUCT_IMAGE } from '../constants/index.js';
+import { ALLOWED_IMAGE_MIME_TYPES, BANNER_IMAGE, CATEGORY_IMAGE, PRODUCT_IMAGE } from '../constants/index.js';
 import { logger } from '../utils/logger.js';
 
 export type AllowedImageMimeType = (typeof ALLOWED_IMAGE_MIME_TYPES)[number];
@@ -30,6 +30,10 @@ const MIME_TO_EXTENSION: Record<AllowedImageMimeType, 'jpg' | 'png' | 'webp'> = 
 };
 
 const UUID_PATTERN = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+
+const BANNER_IMAGE_KEY_PATTERN = new RegExp(
+  `^banners/(desktop|tablet|mobile)-${UUID_PATTERN}.(jpg|png|webp)$`,
+);
 
 const CATEGORY_IMAGE_KEY_PATTERN = new RegExp(
   `^categories/${UUID_PATTERN}/${UUID_PATTERN}\\.(jpg|png|webp)$`,
@@ -114,8 +118,20 @@ export function isManagedProductImageKey(key: string): boolean {
   return parseProductImageKey(key) !== null;
 }
 
+export function isManagedBannerImageKey(key: string): boolean {
+  return BANNER_IMAGE_KEY_PATTERN.test(key);
+}
+
+export function buildBannerImageKey(
+  device: 'desktop' | 'tablet' | 'mobile',
+  contentType: AllowedImageMimeType
+): string {
+  const extension = MIME_TO_EXTENSION[contentType];
+  return `${BANNER_IMAGE.KEY_PREFIX}${device}-${randomUUID()}.${extension}`;
+}
+
 export function isManagedImageKey(key: string): boolean {
-  return isManagedCategoryImageKey(key) || isManagedProductImageKey(key);
+  return isManagedCategoryImageKey(key) || isManagedProductImageKey(key) || isManagedBannerImageKey(key);
 }
 
 export function buildPublicUrl(imageKey: string): string {

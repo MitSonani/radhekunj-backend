@@ -99,6 +99,15 @@ export type CartResponse = {
 // Input types
 // ---------------------------------------------------------------------------
 
+export type MergeCartItemInput = {
+  variantId: string;
+  quantity: number;
+};
+
+export type MergeCartInput = {
+  items: MergeCartItemInput[];
+};
+
 export type AddToCartInput = {
   variantId: string;
   quantity: number;
@@ -583,4 +592,79 @@ export async function removeCoupon(userId: string): Promise<CartResponse> {
 
   const refreshed = await cartRepository.findCartByUserId(userId);
   return buildCartResponse(refreshed, userId);
+}
+
+
+/**
+ * Merges guest cart items into the authenticated user's cart.
+ * Revalidates product and variant availability, stock, and enforces quantity caps.
+ * Gracefully ignores deleted, inactive, or out-of-stock items.
+ */
+export async function mergeCart(userId: string, input: MergeCartInput): Promise<CartResponse> {
+  if (!input.items || input.items.length === 0) {
+    return getCart(userId);
+  }
+
+  // Deduplicate and aggregate identical variantIds in the guest payload
+  const aggregatedMap = new Map<string, number>();
+  for (const item of input.items) {
+    const current = aggregatedMap.get(item.variantId) || 0;
+    aggregatedMap.set(item.variantId, Math.min(99, current + item.quantity));
+  }
+
+  const sortedVariantIds = Array.from(aggregatedMap.keys()).sort();
+
+  const cart = await cartRepository.runTransaction(async (tx) => {
+    // Acquire locks in deterministic sorted order
+    for (const vId of sortedVariantIds) {
+      await cartRepository.lockInventoryRow(vId, tx);
+    }
+
+    const userCart = await cartRepository.findOrCreateCart(userId, tx);
+
+    for (const [variantId, guestQty] of aggregatedMap.entries()) {
+      const variant = await tx.productVariant.findUnique({
+        where: { id: variantId },
+        select: {
+          id: true,
+          status: true,
+          product: { select: { status: true } },
+          inventory: { select: { quantity: true, reservedQuantity: true } },
+        },
+      });
+
+      // Gracefully skip deleted, inactive, or non-purchasable variants
+      if (!variant) continue;
+      if (variant.status !== ProductVariantStatus.ACTIVE || variant.product.status !== ProductStatus.ACTIVE) {
+        continue;
+      }
+
+      const availableStock = Math.max(0, (variant.inventory?.quantity ?? 0) - (variant.inventory?.reservedQuantity ?? 0));
+      if (availableStock <= 0) {
+        continue;
+      }
+
+      const existingItem = await cartRepository.findCartItemByVariantId(userCart.id, variantId, tx);
+
+      if (existingItem) {
+        const mergedQty = Math.min(existingItem.quantity + guestQty, availableStock, 99);
+        if (mergedQty > existingItem.quantity) {
+          await cartRepository.updateCartItemQuantity(existingItem.id, mergedQty, tx);
+        }
+      } else {
+        const initialQty = Math.min(guestQty, availableStock, 99);
+        if (initialQty > 0) {
+          await cartRepository.createCartItem(userCart.id, variantId, initialQty, tx);
+        }
+      }
+    }
+
+    const refreshed = await cartRepository.findCartByUserId(userId, tx);
+    if (!refreshed) {
+      throw new AppError(500, 'Failed to load cart after merge');
+    }
+    return refreshed;
+  });
+
+  return buildCartResponse(cart, userId);
 }

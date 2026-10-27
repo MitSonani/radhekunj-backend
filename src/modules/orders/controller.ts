@@ -1,3 +1,5 @@
+import { checkCodEligibility } from '../financial/service.js';
+import { Prisma } from '@prisma/client';
 import { Request, Response } from 'express';
 import { AppError } from '../../shared/errors/appError.js';
 import { HTTP_STATUS } from '../../shared/constants/index.js';
@@ -56,4 +58,18 @@ export async function getUserOrderByIdHandler(req: Request, res: Response): Prom
   };
 
   res.status(HTTP_STATUS.OK).json(response);
+}
+
+
+export async function getCodEligibilityHandler(req: Request, res: Response): Promise<void> {
+  const amountStr = req.query['amount'] as string | undefined;
+  const postalCode = req.query['postalCode'] as string | undefined;
+
+  const totalAmount = amountStr ? new Prisma.Decimal(amountStr) : new Prisma.Decimal(0);
+  const result = await checkCodEligibility({ totalAmount, postalCode });
+
+  res.status(HTTP_STATUS.OK).json({
+    success: true,
+    data: result,
+  });
 }

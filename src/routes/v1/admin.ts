@@ -1,3 +1,4 @@
+import adminBannersRouter from '../../modules/banners/admin.routes.js';
 import { Router } from 'express';
 import rolesRouter from '../../modules/roles/routes.js';
 import categoriesRouter from '../../modules/categories/routes.js';
@@ -5,6 +6,7 @@ import attributesRouter from '../../modules/attributes/routes.js';
 import productsRouter from '../../modules/products/routes.js';
 import couponsRouter from '../../modules/coupons/routes.js';
 import adminOrdersRouter from '../../modules/orders/admin.routes.js';
+import analyticsRouter from '../../modules/analytics/routes.js';
 import { authenticateJWT, requireRole } from '../../middleware/auth.js';
 import { ROLES } from '../../shared/constants/index.js';
 import { asyncHandler } from '../../shared/utils/asyncHandler.js';
@@ -21,5 +23,8 @@ router.use('/attributes', attributesRouter);
 router.use('/products', productsRouter);
 router.use('/coupons', couponsRouter);
 router.use('/orders', adminOrdersRouter);
+router.use('/analytics', analyticsRouter);
+router.use('/banners', adminBannersRouter);
+
 
 export default router;

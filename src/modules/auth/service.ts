@@ -271,3 +271,60 @@ export async function verifyAdminOtp(
     token: issueSessionToken(admin.id),
   };
 }
+
+
+export async function getProfile(userId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      name: true,
+      mobileNumber: true,
+      countryCode: true,
+      role: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
+
+  if (!user) {
+    throw new NotFoundError('User not found');
+  }
+
+  return user;
+}
+
+export async function updateProfile(userId: string, input: { name: string }) {
+  const existing = await prisma.user.findUnique({ where: { id: userId } });
+  if (!existing) {
+    throw new NotFoundError('User not found');
+  }
+
+  const updated = await prisma.user.update({
+    where: { id: userId },
+    data: {
+      name: input.name.trim(),
+    },
+    select: {
+      id: true,
+      name: true,
+      mobileNumber: true,
+      countryCode: true,
+      role: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
+
+  return updated;
+}

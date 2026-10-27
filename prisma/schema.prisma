@@ -590,3 +590,31 @@ model StoreSetting {
 
   @@map("store_settings")
 }
+
+// ---------------------------------------------------------------------------
+// Homepage Hero Banners
+// ---------------------------------------------------------------------------
+
+model Banner {
+  id              String   @id @default(uuid()) @db.Uuid
+  title           String   @db.VarChar(255)
+  subtitle        String?  @db.VarChar(500)
+  badgeText       String?  @map("badge_text") @db.VarChar(100)
+  ctaLabel        String?  @map("cta_label") @db.VarChar(100)
+  ctaLink         String?  @map("cta_link") @db.VarChar(500)
+  desktopImageUrl String   @map("desktop_image_url") @db.VarChar(1000)
+  tabletImageUrl  String?  @map("tablet_image_url") @db.VarChar(1000)
+  mobileImageUrl  String?  @map("mobile_image_url") @db.VarChar(1000)
+  desktopImageKey String?  @map("desktop_image_key") @db.VarChar(500)
+  tabletImageKey  String?  @map("tablet_image_key") @db.VarChar(500)
+  mobileImageKey  String?  @map("mobile_image_key") @db.VarChar(500)
+  altText         String   @map("alt_text") @db.VarChar(255)
+  textAlignment   String   @default("left") @map("text_alignment") @db.VarChar(20)
+  isActive        Boolean  @default(true) @map("is_active")
+  sortOrder       Int      @default(0) @map("sort_order")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@index([isActive, sortOrder])
+  @@map("banners")
+}

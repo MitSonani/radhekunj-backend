@@ -103,3 +103,22 @@ export async function removeCouponHandler(req: Request, res: Response): Promise<
 
   res.status(HTTP_STATUS.OK).json(response);
 }
+
+
+/**
+ * Merges guest cart items into the authenticated user's cart.
+ */
+export async function mergeCartHandler(req: Request, res: Response): Promise<void> {
+  const userId = requireAuthUser(req);
+  const input = req.body as cartService.MergeCartInput;
+
+  const cart = await cartService.mergeCart(userId, input);
+
+  const response: ApiResponse = {
+    success: true,
+    data: cart,
+    message: 'Cart merged successfully',
+  };
+
+  res.status(HTTP_STATUS.OK).json(response);
+}

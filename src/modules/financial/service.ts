@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../database/prisma.js';
 import { AppError } from '../../shared/errors/appError.js';
-import { isProduction, isTest } from '../../config/env.js';
+import { isProduction } from '../../config/env.js';
 import type {
   ShippingConfig,
   TaxConfig,
@@ -13,13 +13,13 @@ import type {
 
 export const DEFAULT_SHIPPING_CONFIG: ShippingConfig = {
   enabled: true,
-  flatRate: 100,
+  flatRate: 0,
   freeShippingThreshold: 999,
 };
 
 export const DEFAULT_TAX_CONFIG: TaxConfig = {
   enabled: true,
-  ratePercentage: 12,
+  ratePercentage: 0,
   storeState: 'Gujarat',
   isInclusive: false,
 };
@@ -201,4 +201,87 @@ export async function calculateFinancials(
     shippingDetails,
     taxBreakdown,
   };
+}
+
+
+export interface CodConfig {
+  enabled: boolean;
+  maxOrderValue?: number;
+  allowedPostalCodes?: string[];
+}
+
+export const DEFAULT_COD_CONFIG: CodConfig = {
+  enabled: true,
+  maxOrderValue: 50000,
+};
+
+export async function getCodConfig(): Promise<CodConfig> {
+  const setting = await prisma.storeSetting.findUnique({
+    where: { key: 'cod' },
+  }).catch(() => null);
+
+  if (setting && typeof setting.value === 'object' && setting.value !== null) {
+    const val = setting.value as unknown as Partial<CodConfig>;
+    return {
+      enabled: val.enabled ?? true,
+      maxOrderValue: typeof val.maxOrderValue === 'number' ? val.maxOrderValue : undefined,
+      allowedPostalCodes: Array.isArray(val.allowedPostalCodes) ? val.allowedPostalCodes : undefined,
+    };
+  }
+
+  // Fallback to environment variables
+  const envEnabled = process.env['COD_ENABLED'] !== undefined ? process.env['COD_ENABLED'] === 'true' : undefined;
+  const envMaxValue = process.env['COD_MAX_ORDER_VALUE'] ? parseFloat(process.env['COD_MAX_ORDER_VALUE']) : undefined;
+
+  if (envEnabled !== undefined || envMaxValue !== undefined) {
+    return {
+      enabled: envEnabled ?? true,
+      maxOrderValue: envMaxValue,
+    };
+  }
+
+  return DEFAULT_COD_CONFIG;
+}
+
+export async function setCodConfig(config: CodConfig): Promise<void> {
+  await prisma.storeSetting.upsert({
+    where: { key: 'cod' },
+    create: { key: 'cod', value: config as unknown as Prisma.InputJsonValue },
+    update: { value: config as unknown as Prisma.InputJsonValue },
+  });
+}
+
+export async function checkCodEligibility(input: {
+  totalAmount: Prisma.Decimal;
+  postalCode?: string;
+}): Promise<{ isEligible: boolean; reason?: string; maxOrderValue?: number }> {
+  const config = await getCodConfig();
+
+  if (!config.enabled) {
+    return {
+      isEligible: false,
+      reason: 'Cash on Delivery is currently unavailable.',
+    };
+  }
+
+  if (config.maxOrderValue !== undefined && input.totalAmount.gt(config.maxOrderValue)) {
+    return {
+      isEligible: false,
+      reason: `Cash on Delivery is not available for orders above ₹${config.maxOrderValue.toLocaleString('en-IN')}. Please choose Online Payment.`,
+      maxOrderValue: config.maxOrderValue,
+    };
+  }
+
+  if (config.allowedPostalCodes && config.allowedPostalCodes.length > 0) {
+    const postal = (input.postalCode || '').trim();
+    if (!config.allowedPostalCodes.includes(postal)) {
+      return {
+        isEligible: false,
+        reason: `Cash on Delivery is not serviceable for postal code ${postal}. Please choose Online Payment.`,
+        maxOrderValue: config.maxOrderValue,
+      };
+    }
+  }
+
+  return { isEligible: true, maxOrderValue: config.maxOrderValue };
 }

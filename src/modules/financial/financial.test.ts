@@ -7,8 +7,6 @@ import {
   getTaxConfig,
   setShippingConfig,
   setTaxConfig,
-  DEFAULT_SHIPPING_CONFIG,
-  DEFAULT_TAX_CONFIG,
 } from './service.js';
 
 describe('Financial Calculation Service', () => {

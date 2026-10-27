@@ -128,6 +128,18 @@ export type PublicVariantRecord = Prisma.ProductVariantGetPayload<{
 export type PublicProductFilters = {
   search?: string;
   categoryId?: string;
+  minPrice?: number;
+  maxPrice?: number;
+  color?: string;
+  size?: string;
+  inStock?: boolean;
+};
+
+export type CatalogFilterOptions = {
+  categories: Array<{ id: string; name: string; slug: string }>;
+  colors: Array<{ value: string; slug: string; colorCode: string | null }>;
+  sizes: Array<{ value: string; slug: string }>;
+  priceRange: { min: number; max: number };
 };
 
 export type PublicProductSort = 'newest' | 'price_asc' | 'price_desc';
@@ -148,6 +160,71 @@ function buildPublicWhere(filters: PublicProductFilters): Prisma.ProductWhereInp
       { name: { contains: filters.search, mode: 'insensitive' } },
       { slug: { contains: filters.search, mode: 'insensitive' } },
     ];
+  }
+
+  if (filters.minPrice !== undefined || filters.maxPrice !== undefined) {
+    const priceFilter: Prisma.DecimalFilter = {};
+    if (filters.minPrice !== undefined) {
+      priceFilter.gte = new Prisma.Decimal(filters.minPrice);
+    }
+    if (filters.maxPrice !== undefined) {
+      priceFilter.lte = new Prisma.Decimal(filters.maxPrice);
+    }
+    where.basePrice = priceFilter;
+  }
+
+  const variantConditions: Prisma.ProductVariantWhereInput[] = [
+    { status: ProductVariantStatus.ACTIVE },
+  ];
+
+  if (filters.inStock) {
+    variantConditions.push({
+      inventory: {
+        is: {
+          quantity: { gt: 0 },
+        },
+      },
+    });
+  }
+
+  if (filters.color) {
+    const colorLower = filters.color.toLowerCase();
+    variantConditions.push({
+      attributes: {
+        some: {
+          attributeValue: {
+            OR: [
+              { slug: { equals: colorLower } },
+              { value: { equals: filters.color, mode: 'insensitive' } },
+            ],
+          },
+        },
+      },
+    });
+  }
+
+  if (filters.size) {
+    const sizeLower = filters.size.toLowerCase();
+    variantConditions.push({
+      attributes: {
+        some: {
+          attributeValue: {
+            OR: [
+              { slug: { equals: sizeLower } },
+              { value: { equals: filters.size, mode: 'insensitive' } },
+            ],
+          },
+        },
+      },
+    });
+  }
+
+  if (variantConditions.length > 1) {
+    where.variants = {
+      some: {
+        AND: variantConditions,
+      },
+    };
   }
 
   return where;
@@ -210,4 +287,65 @@ export async function findActiveCategoryBySlug(
     where: { slug, status: CategoryStatus.ACTIVE },
     select: { id: true, status: true },
   });
+}
+
+
+/**
+ * Fetches available filter options for public catalog (active categories, colors, sizes, and price bounds).
+ */
+export async function getCatalogFilterOptions(): Promise<CatalogFilterOptions> {
+  const [categories, colors, sizes, priceStats] = await Promise.all([
+    prisma.category.findMany({
+      where: { status: CategoryStatus.ACTIVE },
+      select: { id: true, name: true, slug: true },
+      orderBy: { name: 'asc' },
+    }),
+    prisma.attributeValue.findMany({
+      where: {
+        attribute: { slug: 'color' },
+        variantAttributes: {
+          some: {
+            variant: {
+              status: ProductVariantStatus.ACTIVE,
+              product: { status: ProductStatus.ACTIVE },
+            },
+          },
+        },
+      },
+      select: { value: true, slug: true, colorCode: true },
+      distinct: ['slug'],
+      orderBy: { value: 'asc' },
+    }),
+    prisma.attributeValue.findMany({
+      where: {
+        attribute: { slug: 'size' },
+        variantAttributes: {
+          some: {
+            variant: {
+              status: ProductVariantStatus.ACTIVE,
+              product: { status: ProductStatus.ACTIVE },
+            },
+          },
+        },
+      },
+      select: { value: true, slug: true },
+      distinct: ['slug'],
+      orderBy: { value: 'asc' },
+    }),
+    prisma.product.aggregate({
+      where: { status: ProductStatus.ACTIVE },
+      _min: { basePrice: true },
+      _max: { basePrice: true },
+    }),
+  ]);
+
+  return {
+    categories,
+    colors,
+    sizes,
+    priceRange: {
+      min: priceStats._min.basePrice ? Number(priceStats._min.basePrice) : 0,
+      max: priceStats._max.basePrice ? Number(priceStats._max.basePrice) : 50000,
+    },
+  };
 }

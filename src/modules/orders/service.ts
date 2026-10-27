@@ -1,5 +1,5 @@
 import { prisma } from "../../database/prisma.js";
-import { calculateFinancials } from "../financial/service.js";
+import { calculateFinancials, checkCodEligibility } from "../financial/service.js";
 import { scheduleOrderExpiry } from "./expiryQueue.js";
 import { createRefundRecord, processRefund } from "../payments/refundService.js";
 import crypto from "crypto";
@@ -287,7 +287,7 @@ export async function placeOrder(
     throw new AppError(422, "Cannot place an order with an empty cart");
   }
 
-  return orderRepository.runTransaction(async (tx) => {
+  const placedOrder = await orderRepository.runTransaction(async (tx) => {
     for (const item of cart.items) {
       if (!item.variant.product.status || item.variant.product.status !== "ACTIVE") {
         throw new AppError(422, `Product "${item.variant.product.name}" is no longer active`);
@@ -360,18 +360,27 @@ export async function placeOrder(
     }
 
     const financials = await calculateFinancials({
-      subtotal: Number(subtotal),
-      discountAmount: Number(discountAmount),
-      shippingAddress: {
-        state: addressSnapshot.state,
-      },
+      subtotal,
+      discountAmount,
+      customerState: addressSnapshot.state,
     });
 
-    const shippingFee = new Prisma.Decimal(financials.shippingFee);
-    const taxAmount = new Prisma.Decimal(financials.taxAmount);
-    const totalAmount = new Prisma.Decimal(financials.totalAmount);
+    const shippingFee = financials.shippingFee;
+    const taxAmount = financials.taxAmount;
+    const totalAmount = financials.totalAmount;
 
     const isOnlinePayment = chosenPaymentMethod === PaymentMethod.RAZORPAY;
+
+    if (chosenPaymentMethod === PaymentMethod.COD) {
+      const codEligibility = await checkCodEligibility({
+        totalAmount,
+        postalCode: addressSnapshot.postalCode,
+      });
+
+      if (!codEligibility.isEligible) {
+        throw new AppError(422, codEligibility.reason || 'Cash on Delivery is not available for this order');
+      }
+    }
     const initialOrderStatus: OrderStatus = isOnlinePayment
       ? OrderStatus.PENDING_PAYMENT
       : OrderStatus.CONFIRMED;
@@ -481,10 +490,10 @@ export async function placeOrder(
   });
 
   if (chosenPaymentMethod === PaymentMethod.RAZORPAY) {
-    await scheduleOrderExpiry(orderResponse.id, 15 * 60 * 1000);
+    await scheduleOrderExpiry(placedOrder.id, 15 * 60 * 1000);
   }
 
-  return orderResponse;
+  return placedOrder;
 }
 
 export async function getUserOrders(

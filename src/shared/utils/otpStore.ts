@@ -357,6 +357,6 @@ export async function _clearOtpAttemptsForTest(): Promise<void> {
       if (all.length > 0) {
         await redis.del(...all);
       }
-    } catch {}
+    } catch { /* ignore test cleanup */ }
   }
 }

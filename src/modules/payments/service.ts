@@ -1,11 +1,12 @@
 import crypto from 'crypto';
-import { Payment, PaymentMethod, PaymentStatus, OrderStatus, Prisma } from '@prisma/client';
+import { Payment, PaymentMethod, PaymentStatus, OrderStatus, RefundStatus, Prisma } from '@prisma/client';
 import { prisma } from '../../database/prisma.js';
 import { AppError, NotFoundError } from '../../shared/errors/appError.js';
 import { env } from '../../config/env.js';
 import { appConfig } from '../../config/index.js';
 import * as paymentRepository from './repository.js';
 import * as orderRepository from '../orders/repository.js';
+import { createRefundRecord, processRefund } from './refundService.js';
 import type {
   PaymentResponse,
   RazorpayOrderPayload,
@@ -191,6 +192,8 @@ export async function verifyRazorpayPayment(
     throw new AppError(400, 'Invalid payment signature');
   }
 
+  let refundIdToProcess: string | null = null;
+
   // Execute atomic update in transaction
   const updatedPayment = await prisma.$transaction(async (tx) => {
     // Find pending payment for this providerOrderId
@@ -241,6 +244,30 @@ export async function verifyRazorpayPayment(
       return targetPayment;
     }
 
+    if (orderRow && orderRow.status === OrderStatus.CANCELLED) {
+      // Race condition: payment captured after order was cancelled/expired.
+      // Do NOT commit stock. Create pending refund record for automated gateway refund.
+      const existingRefund = await tx.refund.findFirst({
+        where: { paymentId: targetPayment.id },
+      });
+      if (!existingRefund) {
+        const refundRec = await createRefundRecord(
+          {
+            orderId: order.id,
+            paymentId: targetPayment.id,
+            amount: order.totalAmount,
+            currency: "INR",
+            reason: "Order cancelled or expired before payment confirmation",
+          },
+          tx,
+        );
+        refundIdToProcess = refundRec.id;
+      } else if (existingRefund.status === RefundStatus.PENDING) {
+        refundIdToProcess = existingRefund.id;
+      }
+      return targetPayment;
+    }
+
     if (orderRow && orderRow.status === OrderStatus.PENDING_PAYMENT) {
       const items = await tx.orderItem.findMany({
         where: { orderId: order.id },
@@ -261,6 +288,11 @@ export async function verifyRazorpayPayment(
 
     return targetPayment;
   });
+
+  if (refundIdToProcess) {
+    await processRefund(refundIdToProcess);
+    throw new AppError(400, "Order expired before payment was confirmed. An automatic refund has been initiated.");
+  }
 
   return toPaymentResponse(updatedPayment);
 }
@@ -320,6 +352,8 @@ export async function handleRazorpayWebhook(
         return { received: true };
       }
 
+      let refundIdToProcess: string | null = null;
+
       await prisma.$transaction(async (tx) => {
         const paymentRecord = await tx.payment.findFirst({
           where: { providerOrderId },
@@ -350,11 +384,30 @@ export async function handleRazorpayWebhook(
               where: { id: paymentRecord.orderId },
               data: { status: OrderStatus.CONFIRMED, expiresAt: null },
             });
+          } else if (orderRow && orderRow.status === OrderStatus.CANCELLED) {
+            const existingRefund = await tx.refund.findFirst({
+              where: { paymentId: paymentRecord.id },
+            });
+            if (!existingRefund) {
+              const refundRec = await createRefundRecord(
+                {
+                  orderId: paymentRecord.orderId,
+                  paymentId: paymentRecord.id,
+                  amount: paymentRecord.amount,
+                  currency: paymentRecord.currency,
+                  reason: "Order cancelled or expired before payment capture webhook",
+                },
+                tx,
+              );
+              refundIdToProcess = refundRec.id;
+            } else if (existingRefund.status === RefundStatus.PENDING) {
+              refundIdToProcess = existingRefund.id;
+            }
           }
         } else if (orderIdNote) {
           const order = await tx.order.findUnique({ where: { id: orderIdNote } });
           if (order) {
-            await tx.payment.create({
+            const createdPayment = await tx.payment.create({
               data: {
                 orderId: order.id,
                 paymentMethod: PaymentMethod.RAZORPAY,
@@ -382,9 +435,45 @@ export async function handleRazorpayWebhook(
                 where: { id: order.id },
                 data: { status: OrderStatus.CONFIRMED, expiresAt: null },
               });
+            } else if (orderRow && orderRow.status === OrderStatus.CANCELLED) {
+              const refundRec = await createRefundRecord(
+                {
+                  orderId: order.id,
+                  paymentId: createdPayment.id,
+                  amount: order.totalAmount,
+                  currency: "INR",
+                  reason: "Order cancelled or expired before payment capture webhook",
+                },
+                tx,
+              );
+              refundIdToProcess = refundRec.id;
             }
           }
         }
+      });
+
+      if (refundIdToProcess) {
+        await processRefund(refundIdToProcess);
+      }
+    }
+  }
+
+  if (event.event === "payment.failed") {
+    const paymentEntity = event.payload?.payment?.entity;
+    if (paymentEntity?.order_id) {
+      const providerOrderId = paymentEntity.order_id;
+      const errorDescription =
+        (paymentEntity as { error_description?: string }).error_description ||
+        "Payment failed at gateway";
+      await prisma.payment.updateMany({
+        where: {
+          providerOrderId,
+          paymentStatus: PaymentStatus.PENDING,
+        },
+        data: {
+          paymentStatus: PaymentStatus.FAILED,
+          failureReason: errorDescription,
+        },
       });
     }
   }

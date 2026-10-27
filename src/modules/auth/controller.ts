@@ -1,3 +1,4 @@
+import { AppError } from '../../shared/errors/appError.js';
 import { Request, Response } from 'express';
 import * as authService from './service.js';
 import { ApiResponse } from '../../shared/types/index.js';
@@ -102,6 +103,42 @@ export async function verifyAdminOtpHandler(req: Request, res: Response): Promis
     success: true,
     data,
     message: 'Authentication successful',
+  };
+
+  res.status(HTTP_STATUS.OK).json(response);
+}
+
+
+export async function getProfileHandler(req: Request, res: Response): Promise<void> {
+  const userId = req.user?.id;
+  if (!userId) {
+    throw new AppError(401, 'Authentication required');
+  }
+
+  const profile = await authService.getProfile(userId);
+
+  const response: ApiResponse = {
+    success: true,
+    data: profile,
+    message: 'Profile retrieved successfully',
+  };
+
+  res.status(HTTP_STATUS.OK).json(response);
+}
+
+export async function updateProfileHandler(req: Request, res: Response): Promise<void> {
+  const userId = req.user?.id;
+  if (!userId) {
+    throw new AppError(401, 'Authentication required');
+  }
+
+  const input = req.body as { name: string };
+  const profile = await authService.updateProfile(userId, input);
+
+  const response: ApiResponse = {
+    success: true,
+    data: profile,
+    message: 'Profile updated successfully',
   };
 
   res.status(HTTP_STATUS.OK).json(response);

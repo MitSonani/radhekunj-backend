@@ -6,6 +6,8 @@ import { listPublicProductsQuerySchema, publicProductSlugParamSchema } from './v
 
 const router = Router();
 
+router.get('/filters', asyncHandler(catalogController.getFilterOptionsHandler));
+
 router.get(
   '/',
   validateRequest(listPublicProductsQuerySchema, 'query'),

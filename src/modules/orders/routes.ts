@@ -11,6 +11,9 @@ import {
 
 const router = Router();
 
+// Public check for COD eligibility (accessible to guests and authenticated users)
+router.get('/cod-eligibility', asyncHandler(orderController.getCodEligibilityHandler));
+
 router.use(asyncHandler(authenticateJWT));
 
 /**

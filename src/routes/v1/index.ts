@@ -1,3 +1,4 @@
+import bannersRouter from '../../modules/banners/routes.js';
 import { Router } from 'express';
 import { API_PREFIX } from '../../shared/constants/index.js';
 import adminRouter from './admin.js';
@@ -21,6 +22,8 @@ router.use('/wishlist', wishlistRouter);
 router.use('/addresses', addressRouter);
 router.use('/orders', ordersRouter);
 router.use('/payments', paymentsRouter);
+router.use('/banners', bannersRouter);
+
 
 router.get('/', (_req, res) => {
   res.json({

@@ -92,6 +92,11 @@ export type ListPublicProductsInput = {
   search?: string;
   categorySlug?: string;
   sort: PublicProductSort;
+  minPrice?: number;
+  maxPrice?: number;
+  color?: string;
+  size?: string;
+  inStock?: boolean;
 };
 
 // --- Internal helpers ---
@@ -232,6 +237,11 @@ export async function listPublicProducts(
 ): Promise<{ products: PublicProductListItem[]; pagination: PaginationMeta }> {
   const filters: PublicProductFilters = {
     search: input.search,
+    minPrice: input.minPrice,
+    maxPrice: input.maxPrice,
+    color: input.color,
+    size: input.size,
+    inStock: input.inStock,
   };
 
   if (input.categorySlug) {
@@ -263,4 +273,9 @@ export async function getPublicProductBySlug(slug: string): Promise<PublicProduc
   }
 
   return toPublicProductDetail(product);
+}
+
+
+export async function getCatalogFilterOptions(): Promise<catalogRepository.CatalogFilterOptions> {
+  return catalogRepository.getCatalogFilterOptions();
 }
