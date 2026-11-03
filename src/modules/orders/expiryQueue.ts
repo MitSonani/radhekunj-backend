@@ -4,6 +4,7 @@ import { OrderStatus, PaymentStatus, PaymentMethod } from "@prisma/client";
 import { prisma } from "../../database/prisma.js";
 import { env } from "../../config/env.js";
 import { logger } from "../../shared/utils/logger.js";
+import * as orderRepository from "./repository.js";
 
 const ORDER_EXPIRY_QUEUE_NAME = "order-expiry-queue";
 
@@ -114,14 +115,11 @@ export async function expireOrderIfPending(orderId: string): Promise<{
     });
 
     // 4. Release reserved inventory atomically
-    for (const item of items) {
-      await tx.inventory.update({
-        where: { variantId: item.variantId },
-        data: {
-          reservedQuantity: { decrement: item.quantity },
-        },
-      });
-    }
+    await orderRepository.releaseReservedInventory(items, tx, {
+      referenceType: "EXPIRY",
+      referenceId: orderId,
+      reason: "Payment window expired (15 minutes limit) - reservation released",
+    });
 
     // 5. Roll back coupon usage if applicable
     const couponUsage = await tx.couponUsage.findFirst({

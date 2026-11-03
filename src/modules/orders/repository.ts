@@ -1,4 +1,4 @@
-import { Prisma, OrderStatus, ShipmentStatus, PaymentStatus } from "@prisma/client";
+import { Prisma, OrderStatus, ShipmentStatus, PaymentStatus, InventoryMovementType } from "@prisma/client";
 import { prisma } from "../../database/prisma.js";
 import type { AdminListOrdersFilters } from "./types.js";
 
@@ -489,15 +489,82 @@ export async function lockInventoryRows(
 // Inventory & Coupon Integrity Helpers
 // ---------------------------------------------------------------------------
 
+export interface InventoryMovementContext {
+  referenceType?: string;
+  referenceId?: string;
+  reason?: string;
+  adminId?: string;
+}
+
 export async function reserveInventory(
   items: Array<{ variantId: string; quantity: number }>,
   tx: Prisma.TransactionClient,
+  ctx?: InventoryMovementContext,
 ): Promise<void> {
   for (const item of items) {
+    const inv = await tx.inventory.findUnique({ where: { variantId: item.variantId } });
+    const prevQty = inv?.quantity ?? 0;
+    const prevRes = inv?.reservedQuantity ?? 0;
+    const newRes = prevRes + item.quantity;
+
     await tx.inventory.update({
       where: { variantId: item.variantId },
       data: {
         reservedQuantity: { increment: item.quantity },
+      },
+    });
+
+    await tx.inventoryMovement.create({
+      data: {
+        variantId: item.variantId,
+        type: InventoryMovementType.ORDER_RESERVED,
+        previousQuantity: prevQty,
+        quantityChange: 0,
+        newQuantity: prevQty,
+        previousReserved: prevRes,
+        reservedChange: item.quantity,
+        newReserved: newRes,
+        reason: ctx?.reason ?? "Online checkout stock reservation",
+        referenceType: ctx?.referenceType ?? "ORDER",
+        referenceId: ctx?.referenceId,
+        adminId: ctx?.adminId,
+      },
+    });
+  }
+}
+
+export async function commitDirectInventory(
+  items: Array<{ variantId: string; quantity: number }>,
+  tx: Prisma.TransactionClient,
+  ctx?: InventoryMovementContext,
+): Promise<void> {
+  for (const item of items) {
+    const inv = await tx.inventory.findUnique({ where: { variantId: item.variantId } });
+    const prevQty = inv?.quantity ?? 0;
+    const prevRes = inv?.reservedQuantity ?? 0;
+    const newQty = prevQty - item.quantity;
+
+    await tx.inventory.update({
+      where: { variantId: item.variantId },
+      data: {
+        quantity: { decrement: item.quantity },
+      },
+    });
+
+    await tx.inventoryMovement.create({
+      data: {
+        variantId: item.variantId,
+        type: InventoryMovementType.ORDER_PLACED,
+        previousQuantity: prevQty,
+        quantityChange: -item.quantity,
+        newQuantity: newQty,
+        previousReserved: prevRes,
+        reservedChange: 0,
+        newReserved: prevRes,
+        reason: ctx?.reason ?? "Order confirmed - physical stock committed",
+        referenceType: ctx?.referenceType ?? "ORDER",
+        referenceId: ctx?.referenceId,
+        adminId: ctx?.adminId,
       },
     });
   }
@@ -506,13 +573,37 @@ export async function reserveInventory(
 export async function commitReservedInventory(
   items: Array<{ variantId: string; quantity: number }>,
   tx: Prisma.TransactionClient,
+  ctx?: InventoryMovementContext,
 ): Promise<void> {
   for (const item of items) {
+    const inv = await tx.inventory.findUnique({ where: { variantId: item.variantId } });
+    const prevQty = inv?.quantity ?? 0;
+    const prevRes = inv?.reservedQuantity ?? 0;
+    const newQty = prevQty - item.quantity;
+    const newRes = Math.max(0, prevRes - item.quantity);
+
     await tx.inventory.update({
       where: { variantId: item.variantId },
       data: {
         quantity: { decrement: item.quantity },
         reservedQuantity: { decrement: item.quantity },
+      },
+    });
+
+    await tx.inventoryMovement.create({
+      data: {
+        variantId: item.variantId,
+        type: InventoryMovementType.ORDER_PLACED,
+        previousQuantity: prevQty,
+        quantityChange: -item.quantity,
+        newQuantity: newQty,
+        previousReserved: prevRes,
+        reservedChange: -item.quantity,
+        newReserved: newRes,
+        reason: ctx?.reason ?? "Payment captured - stock committed",
+        referenceType: ctx?.referenceType ?? "PAYMENT",
+        referenceId: ctx?.referenceId,
+        adminId: ctx?.adminId,
       },
     });
   }
@@ -521,12 +612,35 @@ export async function commitReservedInventory(
 export async function releaseReservedInventory(
   items: Array<{ variantId: string; quantity: number }>,
   tx: Prisma.TransactionClient,
+  ctx?: InventoryMovementContext,
 ): Promise<void> {
   for (const item of items) {
+    const inv = await tx.inventory.findUnique({ where: { variantId: item.variantId } });
+    const prevQty = inv?.quantity ?? 0;
+    const prevRes = inv?.reservedQuantity ?? 0;
+    const newRes = Math.max(0, prevRes - item.quantity);
+
     await tx.inventory.update({
       where: { variantId: item.variantId },
       data: {
         reservedQuantity: { decrement: item.quantity },
+      },
+    });
+
+    await tx.inventoryMovement.create({
+      data: {
+        variantId: item.variantId,
+        type: InventoryMovementType.ORDER_RELEASED,
+        previousQuantity: prevQty,
+        quantityChange: 0,
+        newQuantity: prevQty,
+        previousReserved: prevRes,
+        reservedChange: -item.quantity,
+        newReserved: newRes,
+        reason: ctx?.reason ?? "Order reservation released",
+        referenceType: ctx?.referenceType ?? "ORDER",
+        referenceId: ctx?.referenceId,
+        adminId: ctx?.adminId,
       },
     });
   }
@@ -535,12 +649,35 @@ export async function releaseReservedInventory(
 export async function restoreCommittedInventory(
   items: Array<{ variantId: string; quantity: number }>,
   tx: Prisma.TransactionClient,
+  ctx?: InventoryMovementContext,
 ): Promise<void> {
   for (const item of items) {
+    const inv = await tx.inventory.findUnique({ where: { variantId: item.variantId } });
+    const prevQty = inv?.quantity ?? 0;
+    const prevRes = inv?.reservedQuantity ?? 0;
+    const newQty = prevQty + item.quantity;
+
     await tx.inventory.update({
       where: { variantId: item.variantId },
       data: {
         quantity: { increment: item.quantity },
+      },
+    });
+
+    await tx.inventoryMovement.create({
+      data: {
+        variantId: item.variantId,
+        type: InventoryMovementType.ORDER_CANCELLED,
+        previousQuantity: prevQty,
+        quantityChange: item.quantity,
+        newQuantity: newQty,
+        previousReserved: prevRes,
+        reservedChange: 0,
+        newReserved: prevRes,
+        reason: ctx?.reason ?? "Order cancelled - stock restored",
+        referenceType: ctx?.referenceType ?? "ORDER",
+        referenceId: ctx?.referenceId,
+        adminId: ctx?.adminId,
       },
     });
   }

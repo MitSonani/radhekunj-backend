@@ -338,7 +338,7 @@ export async function createVariant(
   data: CreateVariantData,
   db: DbClient = prisma,
 ): Promise<ProductVariantRecord> {
-  return db.productVariant.create({
+  const variant = await db.productVariant.create({
     data: {
       productId: data.productId,
       sku: data.sku,
@@ -357,6 +357,26 @@ export async function createVariant(
     },
     select: variantSelect,
   });
+
+  if (data.quantity > 0) {
+    await db.inventoryMovement.create({
+      data: {
+        variantId: variant.id,
+        type: "STOCK_RECEIVED",
+        previousQuantity: 0,
+        quantityChange: data.quantity,
+        newQuantity: data.quantity,
+        previousReserved: 0,
+        reservedChange: data.reservedQuantity ?? 0,
+        newReserved: data.reservedQuantity ?? 0,
+        reason: "Initial stock received upon variant creation",
+        referenceType: "PRODUCT",
+        referenceId: data.productId,
+      },
+    });
+  }
+
+  return variant;
 }
 
 export async function updateVariant(

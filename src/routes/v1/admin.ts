@@ -11,6 +11,8 @@ import { authenticateJWT, requireRole } from '../../middleware/auth.js';
 import { ROLES } from '../../shared/constants/index.js';
 import { asyncHandler } from '../../shared/utils/asyncHandler.js';
 
+import inventoryRouter from '../../modules/inventory/routes.js';
+
 const router = Router();
 
 // Protect all admin routes
@@ -25,6 +27,7 @@ router.use('/coupons', couponsRouter);
 router.use('/orders', adminOrdersRouter);
 router.use('/analytics', analyticsRouter);
 router.use('/banners', adminBannersRouter);
+router.use('/inventory', inventoryRouter);
 
 
 export default router;

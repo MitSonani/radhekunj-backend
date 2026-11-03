@@ -385,22 +385,24 @@ export async function placeOrder(
       ? OrderStatus.PENDING_PAYMENT
       : OrderStatus.CONFIRMED;
 
+    const orderNumber = generateOrderNumber();
     const expiresAt = isOnlinePayment ? new Date(Date.now() + 15 * 60 * 1000) : null;
 
     if (isOnlinePayment) {
       // Online order: atomically reserve inventory for 15 minutes
-      await orderRepository.reserveInventory(cart.items, tx);
+      await orderRepository.reserveInventory(cart.items, tx, {
+        referenceType: "ORDER",
+        referenceId: orderNumber,
+        reason: "Online checkout stock reservation",
+      });
     } else {
       // COD: commit physical stock immediately
       try {
-        for (const item of cart.items) {
-          await tx.inventory.update({
-            where: { variantId: item.variantId },
-            data: {
-              quantity: { decrement: item.quantity },
-            },
-          });
-        }
+        await orderRepository.commitDirectInventory(cart.items, tx, {
+          referenceType: "ORDER",
+          referenceId: orderNumber,
+          reason: "COD order confirmed - physical stock committed",
+        });
       } catch (err: unknown) {
         if (
           err instanceof Error &&
@@ -412,8 +414,6 @@ export async function placeOrder(
         throw err;
       }
     }
-
-    const orderNumber = generateOrderNumber();
     const order = await orderRepository.createOrder(
       {
         orderNumber,
@@ -621,10 +621,18 @@ export async function updateOrderStatus(
 
       if (current.status === OrderStatus.CONFIRMED) {
         // Order was confirmed: physical stock was committed -> restore committed stock
-        await orderRepository.restoreCommittedInventory(items, tx);
+        await orderRepository.restoreCommittedInventory(items, tx, {
+          referenceType: "ORDER",
+          referenceId: existingOrder.orderNumber,
+          reason: "Order cancelled - stock restored",
+        });
       } else if (current.status === OrderStatus.PENDING_PAYMENT) {
         // Order was pending payment: stock was reserved -> release reservation
-        await orderRepository.releaseReservedInventory(items, tx);
+        await orderRepository.releaseReservedInventory(items, tx, {
+          referenceType: "ORDER",
+          referenceId: existingOrder.orderNumber,
+          reason: "Order cancelled - reservation released",
+        });
       }
 
       // Roll back coupon usage if used on this order

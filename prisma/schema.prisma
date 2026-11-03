@@ -25,6 +25,7 @@ model User {
   addresses     Address[]
   couponUsages  CouponUsage[]
   orders        Order[]
+  inventoryMovements InventoryMovement[] @relation("AdminInventoryMovements")
 
   @@map("users")
 }
@@ -149,6 +150,7 @@ model ProductVariant {
   inventory  Inventory?
   cartItems  CartItem[]
   orderItems OrderItem[]
+  inventoryMovements InventoryMovement[]
 
   @@index([productId])
   @@map("product_variants")
@@ -168,16 +170,58 @@ model ProductVariantAttribute {
 }
 
 model Inventory {
-  id               String   @id @default(uuid()) @db.Uuid
-  variantId        String   @unique @map("variant_id") @db.Uuid
-  quantity         Int      @default(0)
-  reservedQuantity Int      @default(0) @map("reserved_quantity")
-  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz
+  id                String   @id @default(uuid()) @db.Uuid
+  variantId         String   @unique @map("variant_id") @db.Uuid
+  quantity          Int      @default(0)
+  reservedQuantity  Int      @default(0) @map("reserved_quantity")
+  lowStockThreshold Int      @default(5) @map("low_stock_threshold")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
 
   @@map("inventory")
+}
+
+enum InventoryMovementType {
+  STOCK_RECEIVED
+  MANUAL_ADJUSTMENT
+  STOCK_CORRECTION
+  ORDER_PLACED
+  ORDER_RESERVED
+  ORDER_RELEASED
+  ORDER_CANCELLED
+  REFUND_RESTOCKED
+
+  @@map("inventory_movement_type")
+}
+
+model InventoryMovement {
+  id               String                @id @default(uuid()) @db.Uuid
+  variantId        String                @map("variant_id") @db.Uuid
+  type             InventoryMovementType
+  previousQuantity Int                   @map("previous_quantity")
+  quantityChange   Int                   @map("quantity_change")
+  newQuantity      Int                   @map("new_quantity")
+  previousReserved Int                   @default(0) @map("previous_reserved")
+  reservedChange   Int                   @default(0) @map("reserved_change")
+  newReserved      Int                   @default(0) @map("new_reserved")
+  reason           String?               @db.VarChar(255)
+  referenceType    String?               @map("reference_type") @db.VarChar(50)
+  referenceId      String?               @map("reference_id") @db.VarChar(128)
+  adminId          String?               @map("admin_id") @db.Uuid
+  metadata         Json?                 @db.JsonB
+  createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz
+
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  admin   User?          @relation("AdminInventoryMovements", fields: [adminId], references: [id], onDelete: SetNull)
+
+  @@index([variantId])
+  @@index([type])
+  @@index([adminId])
+  @@index([referenceType, referenceId])
+  @@index([createdAt])
+  @@map("inventory_movements")
 }
 
 model ProductImage {

@@ -1,41 +1,43 @@
 /**
- * Development database seed.
+ * Development database seed for Cotton Clique.
  *
  * Safety guards:
  *   - Refuses to run when NODE_ENV=production.
  *   - Refuses to run when DATABASE_URL contains "prod" or "test".
+ *   - NEVER deletes customer user accounts or existing customer orders.
  *
  * Behaviour:
- *   - Clears all application row data (leaves schema & _prisma_migrations intact).
- *   - Creates representative catalog data for every applicable table.
- *   - Running `npm run db:seed` twice produces the same deterministic result.
- *
- * Dependency order for deletion (reverse FK graph):
- *   coupon_usages → coupon_products → coupon_categories → coupons →
- *   cart_items → carts → wishlist_items → addresses →
- *   product_images → inventory → product_variant_attributes →
- *   product_variants → products → categories →
- *   attribute_values → attributes → users → roles
- *
- * Seeding order (FK dependency graph):
- *   roles → users → categories → attributes → attribute_values →
- *   products → product_variants → product_variant_attributes →
- *   inventory → product_images → coupons → coupon_products → coupon_categories
+ *   - Clears development catalog data (products, categories, attributes, coupons, banners).
+ *   - Preserves all customer accounts (e.g. user 'mit').
+ *   - Upserts the dedicated development administrator account.
+ *   - Seeds realistic Cotton Clique catalog: 4 categories, 2 attributes, 10 products with variants,
+ *     inventory stock, images, 3 test coupons, hero banners, and store settings.
+ *   - Running `npm run db:seed` is fully deterministic and safe.
  */
 
 import 'dotenv/config';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma, CouponDiscountType, CouponScope, CouponStatus } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { generateSlug } from '../src/shared/utils/slug.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type ColorKey = 'black' | 'white' | 'green' | 'blue' | 'red' | 'grey' | 'brown' | 'pink';
-type SizeKey = 's' | 'm' | 'l' | 'xl' | 'xxl';
+type ColorKey =
+  | 'black'
+  | 'ivory-white'
+  | 'olive-green'
+  | 'navy-blue'
+  | 'crimson-red'
+  | 'heather-grey'
+  | 'terracotta-brown'
+  | 'dusty-rose'
+  | 'natural-beige';
 
-type AttributeValueDef = { value: string; colorCode?: string };
-type AttributeDef = { name: string; values: AttributeValueDef[] };
+type SizeKey = 'xs' | 's' | 'm' | 'l' | 'xl' | 'xxl';
+
+type AttributeValueDef = { value: string; slug: string; colorCode?: string };
+type AttributeDef = { name: string; slug: string; values: AttributeValueDef[] };
 
 type VariantDef = {
   sku: string;
@@ -65,210 +67,338 @@ type ProductDef = {
   images: ImageDef[];
 };
 
-// ─── Static seed data ─────────────────────────────────────────────────────────
+// ─── Roles & Dedicated Admin User ─────────────────────────────────────────────
 
-const ROLES = ['admin', 'customer'] as const;
-type RoleName = (typeof ROLES)[number];
+const ADMIN_USER = {
+  name: 'Cotton Clique Admin',
+  mobileNumber: '9000000001',
+  countryCode: '+91',
+  roleName: 'admin',
+};
 
-const USERS: Array<{
-  name: string;
-  mobileNumber: string;
-  countryCode: string;
-  roleName: RoleName;
-}> = [
-  { name: 'Admin User', mobileNumber: '+919000000001', countryCode: '+91', roleName: 'admin' },
-  { name: 'Priya Sharma', mobileNumber: '+919800000001', countryCode: '+91', roleName: 'customer' },
-  { name: 'Rahul Verma', mobileNumber: '+919800000002', countryCode: '+91', roleName: 'customer' },
-  { name: 'Sneha Kapoor', mobileNumber: '+919800000003', countryCode: '+91', roleName: 'customer' },
+// ─── Categories ───────────────────────────────────────────────────────────────
+
+const CATEGORIES = [
+  {
+    name: 'Men',
+    slug: 'men',
+    description: 'Tailored menswear crafted from breathable organic cottons and pure linens',
+    imageUrl: 'https://images.unsplash.com/photo-1516257984-b1b4d707412e?q=80&w=800&auto=format&fit=crop',
+  },
+  {
+    name: 'Women',
+    slug: 'women',
+    description: 'Effortless womenswear, flowing dresses, and conscious everyday silhouettes',
+    imageUrl: 'https://images.unsplash.com/photo-1483985988355-763728e1935b?q=80&w=800&auto=format&fit=crop',
+  },
+  {
+    name: 'Essentials',
+    slug: 'essentials',
+    description: 'Core wardrobe staples woven from premium long-staple cotton',
+    imageUrl: 'https://images.unsplash.com/photo-1521572267360-ee0c2909d518?q=80&w=800&auto=format&fit=crop',
+  },
+  {
+    name: 'Accessories',
+    slug: 'accessories',
+    description: 'Handcrafted canvas totes, pure cotton scarves, and everyday accents',
+    imageUrl: 'https://images.unsplash.com/photo-1548036328-c9fa89d128fa?q=80&w=800&auto=format&fit=crop',
+  },
 ];
 
-const CATEGORIES: Array<{ name: string; description: string }> = [
-  { name: 'Men', description: 'Clothing and accessories for men' },
-  { name: 'Women', description: 'Clothing and accessories for women' },
-  { name: 'Accessories', description: 'Bags, belts, and accessories' },
-  { name: 'New Arrivals', description: 'Latest additions to the catalog' },
-];
+// ─── Attributes ───────────────────────────────────────────────────────────────
 
 const ATTRIBUTES: AttributeDef[] = [
   {
     name: 'Size',
+    slug: 'size',
     values: [
-      { value: 'S' },
-      { value: 'M' },
-      { value: 'L' },
-      { value: 'XL' },
-      { value: 'XXL' },
+      { value: 'XS', slug: 'xs' },
+      { value: 'S', slug: 's' },
+      { value: 'M', slug: 'm' },
+      { value: 'L', slug: 'l' },
+      { value: 'XL', slug: 'xl' },
+      { value: 'XXL', slug: 'xxl' },
     ],
   },
   {
     name: 'Color',
+    slug: 'color',
     values: [
-      { value: 'Black', colorCode: '#000000' },
-      { value: 'White', colorCode: '#FFFFFF' },
-      { value: 'Green', colorCode: '#164A35' },
-      { value: 'Blue', colorCode: '#1E3A8A' },
-      { value: 'Red', colorCode: '#B91C1C' },
-      { value: 'Grey', colorCode: '#6B7280' },
-      { value: 'Brown', colorCode: '#78350F' },
-      { value: 'Pink', colorCode: '#F472B6' },
+      { value: 'Black', slug: 'black', colorCode: '#1A1A1A' },
+      { value: 'Ivory White', slug: 'ivory-white', colorCode: '#F5F5F0' },
+      { value: 'Olive Green', slug: 'olive-green', colorCode: '#3D4A3E' },
+      { value: 'Navy Blue', slug: 'navy-blue', colorCode: '#1E293B' },
+      { value: 'Crimson Red', slug: 'crimson-red', colorCode: '#991B1B' },
+      { value: 'Heather Grey', slug: 'heather-grey', colorCode: '#9CA3AF' },
+      { value: 'Terracotta Brown', slug: 'terracotta-brown', colorCode: '#9A3412' },
+      { value: 'Dusty Rose', slug: 'dusty-rose', colorCode: '#E0A899' },
+      { value: 'Natural Beige', slug: 'natural-beige', colorCode: '#D2B48C' },
     ],
   },
 ];
 
+// ─── Products (10 Realistic Cotton Clique Items) ──────────────────────────────
+
 const PRODUCTS: ProductDef[] = [
   {
-    name: 'Premium Cotton T-Shirt',
-    categorySlug: 'men',
+    name: 'Supima Classic Crewneck Tee',
+    categorySlug: 'essentials',
     description:
-      'A wardrobe essential crafted from 100% premium ring-spun cotton. Lightweight, breathable, and designed for an effortless everyday fit.',
-    basePrice: 1499,
+      'Crafted from 100% American Supima cotton with extra-long staple fibers. Exceptionally soft, durable, and naturally breathable for year-round ease.',
+    basePrice: 1299,
     status: 'ACTIVE',
     variants: [
-      { sku: 'AURA-TS-BLK-S', price: 1499, status: 'ACTIVE', color: 'black', size: 's', stock: 15 },
-      { sku: 'AURA-TS-BLK-M', price: 1499, status: 'ACTIVE', color: 'black', size: 'm', stock: 25 },
-      { sku: 'AURA-TS-BLK-L', price: 1499, status: 'ACTIVE', color: 'black', size: 'l', stock: 20 },
-      { sku: 'AURA-TS-BLK-XL', price: 1499, status: 'ACTIVE', color: 'black', size: 'xl', stock: 10 },
-      { sku: 'AURA-TS-WHT-S', price: 1499, status: 'ACTIVE', color: 'white', size: 's', stock: 12 },
-      { sku: 'AURA-TS-WHT-M', price: 1499, status: 'ACTIVE', color: 'white', size: 'm', stock: 20 },
-      { sku: 'AURA-TS-WHT-L', price: 1499, status: 'ACTIVE', color: 'white', size: 'l', stock: 0 },
+      { sku: 'CC-CREW-IVR-S', price: 1299, compareAtPrice: 1599, status: 'ACTIVE', color: 'ivory-white', size: 's', stock: 25 },
+      { sku: 'CC-CREW-IVR-M', price: 1299, compareAtPrice: 1599, status: 'ACTIVE', color: 'ivory-white', size: 'm', stock: 35 },
+      { sku: 'CC-CREW-IVR-L', price: 1299, compareAtPrice: 1599, status: 'ACTIVE', color: 'ivory-white', size: 'l', stock: 30 },
+      { sku: 'CC-CREW-BLK-S', price: 1299, compareAtPrice: 1599, status: 'ACTIVE', color: 'black', size: 's', stock: 20 },
+      { sku: 'CC-CREW-BLK-M', price: 1299, compareAtPrice: 1599, status: 'ACTIVE', color: 'black', size: 'm', stock: 40 },
+      { sku: 'CC-CREW-BLK-L', price: 1299, compareAtPrice: 1599, status: 'ACTIVE', color: 'black', size: 'l', stock: 30 },
+      { sku: 'CC-CREW-OLV-M', price: 1299, compareAtPrice: 1599, status: 'ACTIVE', color: 'olive-green', size: 'm', stock: 25 },
+      { sku: 'CC-CREW-OLV-L', price: 1299, compareAtPrice: 1599, status: 'ACTIVE', color: 'olive-green', size: 'l', stock: 15 },
     ],
     images: [
-      { objectKey: 'products/dev/tshirt/lifestyle.jpg', altText: 'Premium Cotton T-Shirt lifestyle shot', sortOrder: 0, isPrimary: true },
-      { objectKey: 'products/dev/tshirt/black-front.jpg', altText: 'Premium Cotton T-Shirt Black — Front', sortOrder: 1, isPrimary: false, colorKey: 'black' },
-      { objectKey: 'products/dev/tshirt/black-back.jpg', altText: 'Premium Cotton T-Shirt Black — Back', sortOrder: 2, isPrimary: false, colorKey: 'black' },
-      { objectKey: 'products/dev/tshirt/white-front.jpg', altText: 'Premium Cotton T-Shirt White — Front', sortOrder: 3, isPrimary: false, colorKey: 'white' },
-      { objectKey: 'products/dev/tshirt/white-back.jpg', altText: 'Premium Cotton T-Shirt White — Back', sortOrder: 4, isPrimary: false, colorKey: 'white' },
+      { objectKey: 'products/dev/supima-tee/lifestyle.jpg', altText: 'Supima Classic Crewneck Tee lifestyle', sortOrder: 0, isPrimary: true },
+      { objectKey: 'products/dev/supima-tee/ivory-front.jpg', altText: 'Supima Tee Ivory White — Front', sortOrder: 1, isPrimary: false, colorKey: 'ivory-white' },
+      { objectKey: 'products/dev/supima-tee/black-front.jpg', altText: 'Supima Tee Black — Front', sortOrder: 2, isPrimary: false, colorKey: 'black' },
+      { objectKey: 'products/dev/supima-tee/olive-front.jpg', altText: 'Supima Tee Olive Green — Front', sortOrder: 3, isPrimary: false, colorKey: 'olive-green' },
     ],
   },
   {
-    name: 'Oversized Relaxed Shirt',
+    name: 'Relaxed Camp Collar Linen-Cotton Shirt',
     categorySlug: 'men',
     description:
-      'Dropped shoulders, a boxy silhouette, and breathable fabric — this shirt is built for comfort without sacrificing style.',
-    basePrice: 1999,
-    status: 'ACTIVE',
-    variants: [
-      { sku: 'AURA-ORS-GRN-M', price: 1999, status: 'ACTIVE', color: 'green', size: 'm', stock: 18 },
-      { sku: 'AURA-ORS-GRN-L', price: 1999, status: 'ACTIVE', color: 'green', size: 'l', stock: 14 },
-      { sku: 'AURA-ORS-BLU-M', price: 1999, status: 'ACTIVE', color: 'blue', size: 'm', stock: 20 },
-      { sku: 'AURA-ORS-BLU-L', price: 1999, status: 'ACTIVE', color: 'blue', size: 'l', stock: 16 },
-      { sku: 'AURA-ORS-BLU-XL', price: 1999, status: 'ACTIVE', color: 'blue', size: 'xl', stock: 8 },
-    ],
-    images: [
-      { objectKey: 'products/dev/oversized-shirt/lifestyle.jpg', altText: 'Oversized Relaxed Shirt lifestyle shot', sortOrder: 0, isPrimary: true },
-      { objectKey: 'products/dev/oversized-shirt/green-front.jpg', altText: 'Oversized Relaxed Shirt Green — Front', sortOrder: 1, isPrimary: false, colorKey: 'green' },
-      { objectKey: 'products/dev/oversized-shirt/green-back.jpg', altText: 'Oversized Relaxed Shirt Green — Back', sortOrder: 2, isPrimary: false, colorKey: 'green' },
-      { objectKey: 'products/dev/oversized-shirt/blue-front.jpg', altText: 'Oversized Relaxed Shirt Blue — Front', sortOrder: 3, isPrimary: false, colorKey: 'blue' },
-      { objectKey: 'products/dev/oversized-shirt/blue-back.jpg', altText: 'Oversized Relaxed Shirt Blue — Back', sortOrder: 4, isPrimary: false, colorKey: 'blue' },
-    ],
-  },
-  {
-    name: 'Classic Linen Shirt',
-    categorySlug: 'men',
-    description:
-      'Woven from pure linen, this relaxed-fit shirt keeps you cool and polished through the warmest days.',
+      'Lightweight cotton-linen blend tailored with a retro cuban camp collar and mother-of-pearl buttons. Perfect for relaxed summer afternoons and beachside evenings.',
     basePrice: 2499,
     status: 'ACTIVE',
     variants: [
-      { sku: 'AURA-LS-WHT-S', price: 2499, status: 'ACTIVE', color: 'white', size: 's', stock: 10 },
-      { sku: 'AURA-LS-WHT-M', price: 2499, status: 'ACTIVE', color: 'white', size: 'm', stock: 15 },
-      { sku: 'AURA-LS-WHT-L', price: 2499, status: 'ACTIVE', color: 'white', size: 'l', stock: 12 },
-      { sku: 'AURA-LS-WHT-XL', price: 2499, status: 'ACTIVE', color: 'white', size: 'xl', stock: 6 },
-      { sku: 'AURA-LS-BLU-M', price: 2499, status: 'ACTIVE', color: 'blue', size: 'm', stock: 20 },
-      { sku: 'AURA-LS-BLU-L', price: 2499, status: 'ACTIVE', color: 'blue', size: 'l', stock: 14 },
+      { sku: 'CC-CAMP-NVY-M', price: 2499, compareAtPrice: 2999, status: 'ACTIVE', color: 'navy-blue', size: 'm', stock: 20 },
+      { sku: 'CC-CAMP-NVY-L', price: 2499, compareAtPrice: 2999, status: 'ACTIVE', color: 'navy-blue', size: 'l', stock: 25 },
+      { sku: 'CC-CAMP-NVY-XL', price: 2499, compareAtPrice: 2999, status: 'ACTIVE', color: 'navy-blue', size: 'xl', stock: 15 },
+      { sku: 'CC-CAMP-BEG-M', price: 2499, compareAtPrice: 2999, status: 'ACTIVE', color: 'natural-beige', size: 'm', stock: 30 },
+      { sku: 'CC-CAMP-BEG-L', price: 2499, compareAtPrice: 2999, status: 'ACTIVE', color: 'natural-beige', size: 'l', stock: 20 },
     ],
     images: [
-      { objectKey: 'products/dev/linen-shirt/lifestyle.jpg', altText: 'Classic Linen Shirt lifestyle shot', sortOrder: 0, isPrimary: true },
-      { objectKey: 'products/dev/linen-shirt/white-front.jpg', altText: 'Classic Linen Shirt White — Front', sortOrder: 1, isPrimary: false, colorKey: 'white' },
-      { objectKey: 'products/dev/linen-shirt/white-back.jpg', altText: 'Classic Linen Shirt White — Back', sortOrder: 2, isPrimary: false, colorKey: 'white' },
-      { objectKey: 'products/dev/linen-shirt/blue-front.jpg', altText: 'Classic Linen Shirt Blue — Front', sortOrder: 3, isPrimary: false, colorKey: 'blue' },
-      { objectKey: 'products/dev/linen-shirt/blue-back.jpg', altText: 'Classic Linen Shirt Blue — Back', sortOrder: 4, isPrimary: false, colorKey: 'blue' },
+      { objectKey: 'products/dev/camp-shirt/lifestyle.jpg', altText: 'Relaxed Camp Collar Linen-Cotton Shirt lifestyle', sortOrder: 0, isPrimary: true },
+      { objectKey: 'products/dev/camp-shirt/navy-front.jpg', altText: 'Camp Shirt Navy Blue — Front', sortOrder: 1, isPrimary: false, colorKey: 'navy-blue' },
+      { objectKey: 'products/dev/camp-shirt/beige-front.jpg', altText: 'Camp Shirt Natural Beige — Front', sortOrder: 2, isPrimary: false, colorKey: 'natural-beige' },
     ],
   },
   {
-    name: 'Everyday Hoodie',
+    name: 'Artisan Pleated Cotton Trousers',
     categorySlug: 'men',
     description:
-      'A mid-weight fleece hoodie perfect for layering. Kangaroo pocket, adjustable drawstring, and a relaxed fit that goes with everything.',
-    basePrice: 2999,
+      'Single-pleat tailored trousers cut from structured twill cotton. Features side adjusters, deep slash pockets, and a timeless tapered silhouette.',
+    basePrice: 3299,
     status: 'ACTIVE',
     variants: [
-      { sku: 'AURA-HD-BLK-S', price: 2999, compareAtPrice: 3499, status: 'ACTIVE', color: 'black', size: 's', stock: 20 },
-      { sku: 'AURA-HD-BLK-M', price: 2999, compareAtPrice: 3499, status: 'ACTIVE', color: 'black', size: 'm', stock: 30 },
-      { sku: 'AURA-HD-BLK-L', price: 2999, compareAtPrice: 3499, status: 'ACTIVE', color: 'black', size: 'l', stock: 25 },
-      { sku: 'AURA-HD-GRY-M', price: 2999, compareAtPrice: 3499, status: 'ACTIVE', color: 'grey', size: 'm', stock: 22 },
-      { sku: 'AURA-HD-GRY-L', price: 2999, compareAtPrice: 3499, status: 'ACTIVE', color: 'grey', size: 'l', stock: 0 },
+      { sku: 'CC-TR-BLK-S', price: 3299, compareAtPrice: 3799, status: 'ACTIVE', color: 'black', size: 's', stock: 15 },
+      { sku: 'CC-TR-BLK-M', price: 3299, compareAtPrice: 3799, status: 'ACTIVE', color: 'black', size: 'm', stock: 20 },
+      { sku: 'CC-TR-BLK-L', price: 3299, compareAtPrice: 3799, status: 'ACTIVE', color: 'black', size: 'l', stock: 18 },
+      { sku: 'CC-TR-TER-M', price: 3299, compareAtPrice: 3799, status: 'ACTIVE', color: 'terracotta-brown', size: 'm', stock: 14 },
+      { sku: 'CC-TR-TER-L', price: 3299, compareAtPrice: 3799, status: 'ACTIVE', color: 'terracotta-brown', size: 'l', stock: 12 },
     ],
     images: [
-      { objectKey: 'products/dev/hoodie/lifestyle.jpg', altText: 'Everyday Hoodie lifestyle shot', sortOrder: 0, isPrimary: true },
-      { objectKey: 'products/dev/hoodie/black-front.jpg', altText: 'Everyday Hoodie Black — Front', sortOrder: 1, isPrimary: false, colorKey: 'black' },
-      { objectKey: 'products/dev/hoodie/black-back.jpg', altText: 'Everyday Hoodie Black — Back', sortOrder: 2, isPrimary: false, colorKey: 'black' },
-      { objectKey: 'products/dev/hoodie/grey-front.jpg', altText: 'Everyday Hoodie Grey — Front', sortOrder: 3, isPrimary: false, colorKey: 'grey' },
-      { objectKey: 'products/dev/hoodie/grey-back.jpg', altText: 'Everyday Hoodie Grey — Back', sortOrder: 4, isPrimary: false, colorKey: 'grey' },
+      { objectKey: 'products/dev/trousers/lifestyle.jpg', altText: 'Artisan Pleated Cotton Trousers lifestyle', sortOrder: 0, isPrimary: true },
+      { objectKey: 'products/dev/trousers/black-front.jpg', altText: 'Pleated Trousers Black — Front', sortOrder: 1, isPrimary: false, colorKey: 'black' },
+      { objectKey: 'products/dev/trousers/terracotta-front.jpg', altText: 'Pleated Trousers Terracotta — Front', sortOrder: 2, isPrimary: false, colorKey: 'terracotta-brown' },
     ],
   },
   {
-    name: 'Straight Fit Trousers',
+    name: 'Organic Cotton Oxford Button-Down Shirt',
     categorySlug: 'men',
     description:
-      'Clean lines, a straight leg, and a comfortable mid-rise. These versatile trousers transition effortlessly from casual to smart-casual.',
+      'A heritage staple crafted from substantial pinpoint oxford cotton. Features a rolled button-down collar, box pleat with locker loop, and reinforced seams.',
+    basePrice: 2799,
+    status: 'ACTIVE',
+    variants: [
+      { sku: 'CC-OX-IVR-M', price: 2799, compareAtPrice: 3199, status: 'ACTIVE', color: 'ivory-white', size: 'm', stock: 22 },
+      { sku: 'CC-OX-IVR-L', price: 2799, compareAtPrice: 3199, status: 'ACTIVE', color: 'ivory-white', size: 'l', stock: 25 },
+      { sku: 'CC-OX-NVY-M', price: 2799, compareAtPrice: 3199, status: 'ACTIVE', color: 'navy-blue', size: 'm', stock: 18 },
+      { sku: 'CC-OX-NVY-L', price: 2799, compareAtPrice: 3199, status: 'ACTIVE', color: 'navy-blue', size: 'l', stock: 16 },
+    ],
+    images: [
+      { objectKey: 'products/dev/oxford-shirt/lifestyle.jpg', altText: 'Organic Cotton Oxford Button-Down Shirt lifestyle', sortOrder: 0, isPrimary: true },
+      { objectKey: 'products/dev/oxford-shirt/ivory-front.jpg', altText: 'Oxford Shirt Ivory White — Front', sortOrder: 1, isPrimary: false, colorKey: 'ivory-white' },
+      { objectKey: 'products/dev/oxford-shirt/navy-front.jpg', altText: 'Oxford Shirt Navy Blue — Front', sortOrder: 2, isPrimary: false, colorKey: 'navy-blue' },
+    ],
+  },
+  {
+    name: 'Handloom Cotton Tiered Midi Dress',
+    categorySlug: 'women',
+    description:
+      'Tiered breezy silhouette handwoven from pure organic khadi cotton. Finished with subtle puffed sleeves, mother-of-pearl buttons, and dual concealed side pockets.',
     basePrice: 3499,
     status: 'ACTIVE',
     variants: [
-      { sku: 'AURA-TRS-BLK-S', price: 3499, status: 'ACTIVE', color: 'black', size: 's', stock: 8 },
-      { sku: 'AURA-TRS-BLK-M', price: 3499, status: 'ACTIVE', color: 'black', size: 'm', stock: 14 },
-      { sku: 'AURA-TRS-BLK-L', price: 3499, status: 'ACTIVE', color: 'black', size: 'l', stock: 10 },
-      { sku: 'AURA-TRS-BRN-M', price: 3499, status: 'ACTIVE', color: 'brown', size: 'm', stock: 12 },
-      { sku: 'AURA-TRS-BRN-L', price: 3499, status: 'ACTIVE', color: 'brown', size: 'l', stock: 6 },
+      { sku: 'CC-DR-ROSE-S', price: 3499, compareAtPrice: 3999, status: 'ACTIVE', color: 'dusty-rose', size: 's', stock: 12 },
+      { sku: 'CC-DR-ROSE-M', price: 3499, compareAtPrice: 3999, status: 'ACTIVE', color: 'dusty-rose', size: 'm', stock: 18 },
+      { sku: 'CC-DR-ROSE-L', price: 3499, compareAtPrice: 3999, status: 'ACTIVE', color: 'dusty-rose', size: 'l', stock: 10 },
+      { sku: 'CC-DR-IVR-S', price: 3499, compareAtPrice: 3999, status: 'ACTIVE', color: 'ivory-white', size: 's', stock: 14 },
+      { sku: 'CC-DR-IVR-M', price: 3499, compareAtPrice: 3999, status: 'ACTIVE', color: 'ivory-white', size: 'm', stock: 20 },
     ],
     images: [
-      { objectKey: 'products/dev/trousers/lifestyle.jpg', altText: 'Straight Fit Trousers lifestyle shot', sortOrder: 0, isPrimary: true },
-      { objectKey: 'products/dev/trousers/black-front.jpg', altText: 'Straight Fit Trousers Black — Front', sortOrder: 1, isPrimary: false, colorKey: 'black' },
-      { objectKey: 'products/dev/trousers/black-back.jpg', altText: 'Straight Fit Trousers Black — Back', sortOrder: 2, isPrimary: false, colorKey: 'black' },
-      { objectKey: 'products/dev/trousers/brown-front.jpg', altText: 'Straight Fit Trousers Brown — Front', sortOrder: 3, isPrimary: false, colorKey: 'brown' },
-      { objectKey: 'products/dev/trousers/brown-back.jpg', altText: 'Straight Fit Trousers Brown — Back', sortOrder: 4, isPrimary: false, colorKey: 'brown' },
+      { objectKey: 'products/dev/tiered-dress/lifestyle.jpg', altText: 'Handloom Cotton Tiered Midi Dress lifestyle', sortOrder: 0, isPrimary: true },
+      { objectKey: 'products/dev/tiered-dress/rose-front.jpg', altText: 'Tiered Dress Dusty Rose — Front', sortOrder: 1, isPrimary: false, colorKey: 'dusty-rose' },
+      { objectKey: 'products/dev/tiered-dress/ivory-front.jpg', altText: 'Tiered Dress Ivory White — Front', sortOrder: 2, isPrimary: false, colorKey: 'ivory-white' },
     ],
   },
   {
-    name: 'Floral Wrap Dress',
+    name: 'Breezy Linen-Cotton Wrap Top',
     categorySlug: 'women',
     description:
-      'A flowing wrap silhouette with a delicate print. Adjustable tie waist and midi length make it suitable for any occasion.',
-    basePrice: 2299,
+      'Flattering kimono-style wrap top with adjustable waist ties and deep V-neckline. Breathable, softly textured, and easily styled with denim or tailored trousers.',
+    basePrice: 1999,
     status: 'ACTIVE',
     variants: [
-      { sku: 'AURA-WD-GRN-S', price: 2299, status: 'ACTIVE', color: 'green', size: 's', stock: 16 },
-      { sku: 'AURA-WD-GRN-M', price: 2299, status: 'ACTIVE', color: 'green', size: 'm', stock: 20 },
-      { sku: 'AURA-WD-GRN-L', price: 2299, status: 'ACTIVE', color: 'green', size: 'l', stock: 12 },
-      { sku: 'AURA-WD-PNK-M', price: 2299, status: 'ACTIVE', color: 'pink', size: 'm', stock: 18 },
-      { sku: 'AURA-WD-PNK-L', price: 2299, status: 'ACTIVE', color: 'pink', size: 'l', stock: 10 },
+      { sku: 'CC-WP-OLV-S', price: 1999, compareAtPrice: 2399, status: 'ACTIVE', color: 'olive-green', size: 's', stock: 16 },
+      { sku: 'CC-WP-OLV-M', price: 1999, compareAtPrice: 2399, status: 'ACTIVE', color: 'olive-green', size: 'm', stock: 24 },
+      { sku: 'CC-WP-BEG-S', price: 1999, compareAtPrice: 2399, status: 'ACTIVE', color: 'natural-beige', size: 's', stock: 15 },
+      { sku: 'CC-WP-BEG-M', price: 1999, compareAtPrice: 2399, status: 'ACTIVE', color: 'natural-beige', size: 'm', stock: 22 },
+      { sku: 'CC-WP-BEG-L', price: 1999, compareAtPrice: 2399, status: 'ACTIVE', color: 'natural-beige', size: 'l', stock: 12 },
     ],
     images: [
-      { objectKey: 'products/dev/wrap-dress/lifestyle.jpg', altText: 'Floral Wrap Dress lifestyle shot', sortOrder: 0, isPrimary: true },
-      { objectKey: 'products/dev/wrap-dress/green-front.jpg', altText: 'Floral Wrap Dress Green — Front', sortOrder: 1, isPrimary: false, colorKey: 'green' },
-      { objectKey: 'products/dev/wrap-dress/green-back.jpg', altText: 'Floral Wrap Dress Green — Back', sortOrder: 2, isPrimary: false, colorKey: 'green' },
-      { objectKey: 'products/dev/wrap-dress/pink-front.jpg', altText: 'Floral Wrap Dress Pink — Front', sortOrder: 3, isPrimary: false, colorKey: 'pink' },
-      { objectKey: 'products/dev/wrap-dress/pink-back.jpg', altText: 'Floral Wrap Dress Pink — Back', sortOrder: 4, isPrimary: false, colorKey: 'pink' },
+      { objectKey: 'products/dev/wrap-top/lifestyle.jpg', altText: 'Breezy Linen-Cotton Wrap Top lifestyle', sortOrder: 0, isPrimary: true },
+      { objectKey: 'products/dev/wrap-top/olive-front.jpg', altText: 'Wrap Top Olive Green — Front', sortOrder: 1, isPrimary: false, colorKey: 'olive-green' },
+      { objectKey: 'products/dev/wrap-top/beige-front.jpg', altText: 'Wrap Top Natural Beige — Front', sortOrder: 2, isPrimary: false, colorKey: 'natural-beige' },
     ],
   },
   {
-    name: 'Cropped Denim Jacket',
+    name: 'Wide-Leg Pleated Cotton Culottes',
     categorySlug: 'women',
     description:
-      'A classic denim jacket reimagined with a cropped, tailored silhouette. A timeless layering piece for year-round styling.',
-    basePrice: 3999,
-    status: 'INACTIVE',
+      'Modern wide-leg silhouette featuring crisp front pleats and a relaxed elasticated back waistband. Tailored from premium breathable cotton canvas.',
+    basePrice: 2699,
+    status: 'ACTIVE',
     variants: [
-      { sku: 'AURA-DJ-BLU-S', price: 3999, status: 'INACTIVE', color: 'blue', size: 's', stock: 0 },
-      { sku: 'AURA-DJ-BLU-M', price: 3999, status: 'INACTIVE', color: 'blue', size: 'm', stock: 0 },
-      { sku: 'AURA-DJ-BLU-L', price: 3999, status: 'INACTIVE', color: 'blue', size: 'l', stock: 0 },
-      { sku: 'AURA-DJ-BLU-XL', price: 3999, status: 'INACTIVE', color: 'blue', size: 'xl', stock: 0 },
+      { sku: 'CC-CUL-BLK-S', price: 2699, compareAtPrice: 3099, status: 'ACTIVE', color: 'black', size: 's', stock: 14 },
+      { sku: 'CC-CUL-BLK-M', price: 2699, compareAtPrice: 3099, status: 'ACTIVE', color: 'black', size: 'm', stock: 20 },
+      { sku: 'CC-CUL-TER-M', price: 2699, compareAtPrice: 3099, status: 'ACTIVE', color: 'terracotta-brown', size: 'm', stock: 18 },
+      { sku: 'CC-CUL-TER-L', price: 2699, compareAtPrice: 3099, status: 'ACTIVE', color: 'terracotta-brown', size: 'l', stock: 10 },
     ],
     images: [
-      { objectKey: 'products/dev/denim-jacket/lifestyle.jpg', altText: 'Cropped Denim Jacket lifestyle shot', sortOrder: 0, isPrimary: true },
-      { objectKey: 'products/dev/denim-jacket/blue-front.jpg', altText: 'Cropped Denim Jacket Blue — Front', sortOrder: 1, isPrimary: false, colorKey: 'blue' },
-      { objectKey: 'products/dev/denim-jacket/blue-back.jpg', altText: 'Cropped Denim Jacket Blue — Back', sortOrder: 2, isPrimary: false, colorKey: 'blue' },
+      { objectKey: 'products/dev/culottes/lifestyle.jpg', altText: 'Wide-Leg Pleated Cotton Culottes lifestyle', sortOrder: 0, isPrimary: true },
+      { objectKey: 'products/dev/culottes/black-front.jpg', altText: 'Pleated Culottes Black — Front', sortOrder: 1, isPrimary: false, colorKey: 'black' },
+      { objectKey: 'products/dev/culottes/terracotta-front.jpg', altText: 'Pleated Culottes Terracotta — Front', sortOrder: 2, isPrimary: false, colorKey: 'terracotta-brown' },
     ],
+  },
+  {
+    name: 'Heavyweight French Terry Pullover Hoodie',
+    categorySlug: 'essentials',
+    description:
+      'Custom-knit 450 GSM organic French terry cotton. Double-layered hood, rib-knit cuffs and hem, and a seamless kangaroo pocket built for lifelong durability.',
+    basePrice: 3799,
+    status: 'ACTIVE',
+    variants: [
+      { sku: 'CC-HD-GRY-M', price: 3799, compareAtPrice: 4299, status: 'ACTIVE', color: 'heather-grey', size: 'm', stock: 25 },
+      { sku: 'CC-HD-GRY-L', price: 3799, compareAtPrice: 4299, status: 'ACTIVE', color: 'heather-grey', size: 'l', stock: 30 },
+      { sku: 'CC-HD-GRY-XL', price: 3799, compareAtPrice: 4299, status: 'ACTIVE', color: 'heather-grey', size: 'xl', stock: 15 },
+      { sku: 'CC-HD-BLK-M', price: 3799, compareAtPrice: 4299, status: 'ACTIVE', color: 'black', size: 'm', stock: 20 },
+      { sku: 'CC-HD-BLK-L', price: 3799, compareAtPrice: 4299, status: 'ACTIVE', color: 'black', size: 'l', stock: 25 },
+    ],
+    images: [
+      { objectKey: 'products/dev/hoodie/lifestyle.jpg', altText: 'Heavyweight French Terry Pullover Hoodie lifestyle', sortOrder: 0, isPrimary: true },
+      { objectKey: 'products/dev/hoodie/grey-front.jpg', altText: 'Pullover Hoodie Heather Grey — Front', sortOrder: 1, isPrimary: false, colorKey: 'heather-grey' },
+      { objectKey: 'products/dev/hoodie/black-front.jpg', altText: 'Pullover Hoodie Black — Front', sortOrder: 2, isPrimary: false, colorKey: 'black' },
+    ],
+  },
+  {
+    name: 'Heavy Canvas Daily Tote Bag',
+    categorySlug: 'accessories',
+    description:
+      'Durable 16oz duck canvas tote featuring reinforced cross-stitch webbing handles, interior zip utility pocket, and brass key clip. Engineered for daily commuting.',
+    basePrice: 1199,
+    status: 'ACTIVE',
+    variants: [
+      { sku: 'CC-TOTE-BEG-OS', price: 1199, compareAtPrice: 1499, status: 'ACTIVE', color: 'natural-beige', size: 'm', stock: 40 },
+      { sku: 'CC-TOTE-OLV-OS', price: 1199, compareAtPrice: 1499, status: 'ACTIVE', color: 'olive-green', size: 'm', stock: 35 },
+      { sku: 'CC-TOTE-BLK-OS', price: 1199, compareAtPrice: 1499, status: 'ACTIVE', color: 'black', size: 'm', stock: 30 },
+    ],
+    images: [
+      { objectKey: 'products/dev/tote-bag/lifestyle.jpg', altText: 'Heavy Canvas Daily Tote Bag lifestyle', sortOrder: 0, isPrimary: true },
+      { objectKey: 'products/dev/tote-bag/beige-front.jpg', altText: 'Canvas Tote Natural Beige — Front', sortOrder: 1, isPrimary: false, colorKey: 'natural-beige' },
+      { objectKey: 'products/dev/tote-bag/olive-front.jpg', altText: 'Canvas Tote Olive Green — Front', sortOrder: 2, isPrimary: false, colorKey: 'olive-green' },
+    ],
+  },
+  {
+    name: 'Artisan Hand-Dyed Cotton Scarf',
+    categorySlug: 'accessories',
+    description:
+      'Featherweight mulmul cotton scarf hand-dyed with natural indigo and madder extracts. Soft fringe edges and rich artisanal depth.',
+    basePrice: 899,
+    status: 'ACTIVE',
+    variants: [
+      { sku: 'CC-SCF-NVY-OS', price: 899, compareAtPrice: 1199, status: 'ACTIVE', color: 'navy-blue', size: 'm', stock: 25 },
+      { sku: 'CC-SCF-RED-OS', price: 899, compareAtPrice: 1199, status: 'ACTIVE', color: 'crimson-red', size: 'm', stock: 20 },
+    ],
+    images: [
+      { objectKey: 'products/dev/scarf/lifestyle.jpg', altText: 'Artisan Hand-Dyed Cotton Scarf lifestyle', sortOrder: 0, isPrimary: true },
+      { objectKey: 'products/dev/scarf/navy-front.jpg', altText: 'Cotton Scarf Navy Blue — Front', sortOrder: 1, isPrimary: false, colorKey: 'navy-blue' },
+      { objectKey: 'products/dev/scarf/red-front.jpg', altText: 'Cotton Scarf Crimson Red — Front', sortOrder: 2, isPrimary: false, colorKey: 'crimson-red' },
+    ],
+  },
+];
+
+// ─── Coupons ──────────────────────────────────────────────────────────────────
+
+const COUPONS = [
+  {
+    code: 'CLIQUE10',
+    discountType: CouponDiscountType.PERCENTAGE,
+    discountValue: 10,
+    scope: CouponScope.CART,
+    minimumCartValue: 500,
+    maximumDiscount: 1000,
+  },
+  {
+    code: 'COTTON20',
+    discountType: CouponDiscountType.PERCENTAGE,
+    discountValue: 20,
+    scope: CouponScope.CATEGORY,
+    categorySlug: 'essentials',
+    minimumCartValue: 1000,
+    maximumDiscount: 1500,
+  },
+  {
+    code: 'FLAT500',
+    discountType: CouponDiscountType.FIXED_AMOUNT,
+    discountValue: 500,
+    scope: CouponScope.CART,
+    minimumCartValue: 2000,
+    maximumDiscount: null,
+  },
+];
+
+// ─── Hero Banners ─────────────────────────────────────────────────────────────
+
+const BANNERS = [
+  {
+    title: 'The Art of Pure Cotton',
+    subtitle: 'Discover timeless silhouettes hand-tailored from certified organic cotton and pure linens.',
+    badgeText: 'New Season 2026',
+    ctaLabel: 'Explore Collection',
+    ctaLink: '/products',
+    desktopImageUrl: 'https://images.unsplash.com/photo-1490481651871-ab68de25d43d?q=80&w=1600&auto=format&fit=crop',
+    tabletImageUrl: 'https://images.unsplash.com/photo-1490481651871-ab68de25d43d?q=80&w=1024&auto=format&fit=crop',
+    mobileImageUrl: 'https://images.unsplash.com/photo-1490481651871-ab68de25d43d?q=80&w=640&auto=format&fit=crop',
+    altText: 'Cotton Clique Autumn Winter Collection',
+    textAlignment: 'left',
+    isActive: true,
+    sortOrder: 0,
+  },
+  {
+    title: 'Everyday Luxury Essentials',
+    subtitle: 'Understated staples crafted for conscious, enduring living. Ethically sourced and tailored to perfection.',
+    badgeText: 'Artisan Heritage Edit',
+    ctaLabel: 'Shop Essentials',
+    ctaLink: '/categories/essentials',
+    desktopImageUrl: 'https://images.unsplash.com/photo-1441986300917-64674bd600d8?q=80&w=1600&auto=format&fit=crop',
+    tabletImageUrl: 'https://images.unsplash.com/photo-1441986300917-64674bd600d8?q=80&w=1024&auto=format&fit=crop',
+    mobileImageUrl: 'https://images.unsplash.com/photo-1441986300917-64674bd600d8?q=80&w=640&auto=format&fit=crop',
+    altText: 'Cotton Clique Heritage Essentials',
+    textAlignment: 'left',
+    isActive: true,
+    sortOrder: 1,
   },
 ];
 
@@ -284,19 +414,13 @@ const dbName = new URL(connectionString).pathname.replace(/^\//, '');
 const nodeEnv = process.env.NODE_ENV ?? 'development';
 
 if (nodeEnv === 'production') {
-  throw new Error(
-    `Seed refused: NODE_ENV is "production". This script is for development only.`,
-  );
+  throw new Error('Seed refused: NODE_ENV is "production". This script is for development only.');
 }
 if (dbName.includes('prod')) {
-  throw new Error(
-    `Seed refused: database "${dbName}" appears to be a production database. Aborting.`,
-  );
+  throw new Error(`Seed refused: database "${dbName}" appears to be a production database. Aborting.`);
 }
 if (dbName.includes('test')) {
-  throw new Error(
-    `Seed refused: database "${dbName}" is the test database. Use the development database only.`,
-  );
+  throw new Error(`Seed refused: database "${dbName}" is the test database. Use the development database only.`);
 }
 
 console.log(`\nTarget database : ${dbName}`);
@@ -306,23 +430,30 @@ console.log(`Port            : ${new URL(connectionString).port || '5432'}\n`);
 const pool = new pg.Pool({ connectionString });
 const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
 
-// ─── Clear ────────────────────────────────────────────────────────────────────
+// ─── Clear Catalog Data Only ──────────────────────────────────────────────────
 
 /**
- * Deletes all application row data from the development database.
- * Preserves schema tables and _prisma_migrations.
- * Deletion follows reverse FK dependency order.
+ * Deletes development catalog data (products, categories, attributes, banners, coupons).
+ * PRESERVES all customer accounts (users with role 'customer') and orders.
  */
-async function clearDevData(): Promise<void> {
-  console.log('Clearing existing development data...');
+async function clearCatalogData(): Promise<void> {
+  console.log('Safely resetting development catalog data (preserving customer accounts & orders)...');
+
   await prisma.couponUsage.deleteMany();
   await prisma.couponProduct.deleteMany();
   await prisma.couponCategory.deleteMany();
-  await prisma.cartItem.deleteMany();
-  await prisma.cart.deleteMany();
-  await prisma.wishlistItem.deleteMany();
-  await prisma.address.deleteMany();
   await prisma.coupon.deleteMany();
+
+  await prisma.banner.deleteMany();
+  await prisma.cartItem.deleteMany();
+  await prisma.wishlistItem.deleteMany();
+
+  await prisma.inventoryMovement.deleteMany().catch(() => {});
+  await prisma.refund.deleteMany().catch(() => {});
+  await prisma.payment.deleteMany().catch(() => {});
+  await prisma.shipment.deleteMany().catch(() => {});
+  await prisma.orderItem.deleteMany().catch(() => {});
+  await prisma.order.deleteMany().catch(() => {});
   await prisma.productImage.deleteMany();
   await prisma.inventory.deleteMany();
   await prisma.productVariantAttribute.deleteMany();
@@ -331,96 +462,109 @@ async function clearDevData(): Promise<void> {
   await prisma.category.deleteMany();
   await prisma.attributeValue.deleteMany();
   await prisma.attribute.deleteMany();
-  await prisma.user.deleteMany();
-  await prisma.role.deleteMany();
-  console.log('  ✓ All development data cleared\n');
+
+  console.log('  ✓ Catalog and marketing data reset\n');
 }
 
-// ─── Seed functions ───────────────────────────────────────────────────────────
+// ─── Seed Roles & Admin ───────────────────────────────────────────────────────
 
-async function seedRoles(): Promise<Map<string, string>> {
-  const roleIds = new Map<string, string>();
+async function seedRolesAndAdmin(): Promise<{ adminRoleId: string; customerRoleId: string }> {
+  console.log('Configuring roles and administrator account...');
 
-  for (const roleName of ROLES) {
-    const role = await prisma.role.create({ data: { name: roleName } });
-    roleIds.set(roleName, role.id);
+  // Ensure 'customer' role exists
+  let customerRole = await prisma.role.findUnique({ where: { name: 'customer' } });
+  if (!customerRole) {
+    customerRole = await prisma.role.create({ data: { name: 'customer' } });
   }
 
-  console.log(`  ✓ ${ROLES.length} roles`);
-  return roleIds;
-}
+  // Ensure 'admin' role exists
+  let adminRole = await prisma.role.findUnique({ where: { name: 'admin' } });
+  if (!adminRole) {
+    adminRole = await prisma.role.create({ data: { name: 'admin' } });
+  }
 
-async function seedUsers(roleIds: Map<string, string>): Promise<void> {
-  for (const userDef of USERS) {
-    const roleId = roleIds.get(userDef.roleName);
-    if (!roleId) throw new Error(`Role not found in map: ${userDef.roleName}`);
+  // Upsert dedicated development administrator account
+  const existingAdmin = await prisma.user.findFirst({
+    where: { mobileNumber: ADMIN_USER.mobileNumber },
+  });
 
-    await prisma.user.create({
+  if (existingAdmin) {
+    await prisma.user.update({
+      where: { id: existingAdmin.id },
       data: {
-        name: userDef.name,
-        mobileNumber: userDef.mobileNumber,
-        countryCode: userDef.countryCode,
-        roleId,
+        name: ADMIN_USER.name,
+        countryCode: ADMIN_USER.countryCode,
+        roleId: adminRole.id,
       },
     });
+    console.log(`  ✓ Administrator account updated: ${ADMIN_USER.name} (${ADMIN_USER.countryCode} ${ADMIN_USER.mobileNumber})`);
+  } else {
+    await prisma.user.create({
+      data: {
+        name: ADMIN_USER.name,
+        mobileNumber: ADMIN_USER.mobileNumber,
+        countryCode: ADMIN_USER.countryCode,
+        roleId: adminRole.id,
+      },
+    });
+    console.log(`  ✓ Administrator account created: ${ADMIN_USER.name} (${ADMIN_USER.countryCode} ${ADMIN_USER.mobileNumber})`);
   }
 
-  console.log(`  ✓ ${USERS.length} users`);
+  return { adminRoleId: adminRole.id, customerRoleId: customerRole.id };
 }
+
+// ─── Seed Categories ──────────────────────────────────────────────────────────
 
 async function seedCategories(): Promise<Map<string, string>> {
   const categoryIds = new Map<string, string>();
 
   for (const catDef of CATEGORIES) {
-    const slug = generateSlug(catDef.name);
     const category = await prisma.category.create({
       data: {
         name: catDef.name,
-        slug,
+        slug: catDef.slug,
         description: catDef.description,
+        imageUrl: catDef.imageUrl,
         status: 'ACTIVE',
       },
     });
-    categoryIds.set(slug, category.id);
+    categoryIds.set(catDef.slug, category.id);
   }
 
-  console.log(`  ✓ ${CATEGORIES.length} categories`);
+  console.log(`  ✓ ${CATEGORIES.length} categories created with image assets`);
   return categoryIds;
 }
 
-/**
- * Seeds attributes and their values.
- * Returns a lookup map keyed by "<attribute-slug>:<value-slug>", e.g. "color:black", "size:m".
- */
+// ─── Seed Attributes ──────────────────────────────────────────────────────────
+
 async function seedAttributes(): Promise<Map<string, string>> {
   const attrValueIds = new Map<string, string>();
   let totalValues = 0;
 
   for (const attrDef of ATTRIBUTES) {
-    const attrSlug = generateSlug(attrDef.name);
-
     const attribute = await prisma.attribute.create({
-      data: { name: attrDef.name, slug: attrSlug },
+      data: { name: attrDef.name, slug: attrDef.slug },
     });
 
     for (const valDef of attrDef.values) {
-      const valSlug = generateSlug(valDef.value);
       const attrValue = await prisma.attributeValue.create({
         data: {
           attributeId: attribute.id,
           value: valDef.value,
-          slug: valSlug,
+          slug: valDef.slug,
           colorCode: valDef.colorCode ?? null,
         },
       });
-      attrValueIds.set(`${attrSlug}:${valSlug}`, attrValue.id);
+      attrValueIds.set(`${attrDef.slug}:${valDef.slug}`, attrValue.id);
       totalValues++;
     }
   }
 
-  console.log(`  ✓ ${ATTRIBUTES.length} attributes, ${totalValues} attribute values`);
+  console.log(`  ✓ ${ATTRIBUTES.length} attributes with ${totalValues} attribute values created`);
   return attrValueIds;
 }
+
+// ─── Seed Products ────────────────────────────────────────────────────────────
 
 async function seedProducts(
   categoryIds: Map<string, string>,
@@ -440,7 +584,7 @@ async function seedProducts(
         name: productDef.name,
         slug: generateSlug(productDef.name),
         description: productDef.description,
-        basePrice: productDef.basePrice,
+        basePrice: new Prisma.Decimal(productDef.basePrice),
         categoryId,
         status: productDef.status,
       },
@@ -461,8 +605,8 @@ async function seedProducts(
         data: {
           productId: product.id,
           sku: variantDef.sku,
-          price: variantDef.price,
-          compareAtPrice: variantDef.compareAtPrice ?? null,
+          price: new Prisma.Decimal(variantDef.price),
+          compareAtPrice: variantDef.compareAtPrice ? new Prisma.Decimal(variantDef.compareAtPrice) : null,
           status: variantDef.status,
         },
       });
@@ -479,8 +623,27 @@ async function seedProducts(
           variantId: variant.id,
           quantity: variantDef.stock,
           reservedQuantity: 0,
+          lowStockThreshold: 5,
         },
       });
+
+      if (variantDef.stock > 0) {
+        await prisma.inventoryMovement.create({
+          data: {
+            variantId: variant.id,
+            type: 'STOCK_RECEIVED',
+            previousQuantity: 0,
+            quantityChange: variantDef.stock,
+            newQuantity: variantDef.stock,
+            previousReserved: 0,
+            reservedChange: 0,
+            newReserved: 0,
+            reason: 'Initial catalog inventory seed stock',
+            referenceType: 'CATALOG_SEED',
+            referenceId: variantDef.sku,
+          },
+        });
+      }
 
       totalVariants++;
     }
@@ -489,10 +652,6 @@ async function seedProducts(
       const attributeValueId = img.colorKey
         ? (attrValueIds.get(`color:${img.colorKey}`) ?? null)
         : null;
-
-      if (img.colorKey && !attributeValueId) {
-        throw new Error(`Color attribute value not found for image: color:${img.colorKey}`);
-      }
 
       return {
         productId: product.id,
@@ -508,96 +667,131 @@ async function seedProducts(
     totalImages += imageData.length;
   }
 
-  console.log(`  ✓ ${PRODUCTS.length} products`);
-  console.log(`  ✓ ${totalVariants} product variants`);
-  console.log(`  ✓ ${totalImages} product images`);
+  console.log(`  ✓ ${PRODUCTS.length} products created`);
+  console.log(`  ✓ ${totalVariants} product variants with inventory created`);
+  console.log(`  ✓ ${totalImages} product images registered`);
 }
 
-/**
- * Seeds a small set of fake development coupons. No usage records are created.
- *
- * WELCOME10  — 10% off the full cart
- * MEN20      — 20% off products in the Men category
- * TSHIRT15   — 15% off Premium Cotton T-Shirt (all variants)
- */
+// ─── Seed Coupons ─────────────────────────────────────────────────────────────
+
 async function seedCoupons(categoryIds: Map<string, string>): Promise<void> {
   const now = new Date();
   const startsAt = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   const expiresAt = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
 
-  await prisma.coupon.create({
-    data: {
-      code: 'WELCOME10',
-      discountType: 'PERCENTAGE',
-      discountValue: 10,
-      scope: 'CART',
-      status: 'ACTIVE',
-      startsAt,
-      expiresAt,
-    },
-  });
+  for (const coup of COUPONS) {
+    const coupon = await prisma.coupon.create({
+      data: {
+        code: coup.code,
+        discountType: coup.discountType,
+        discountValue: new Prisma.Decimal(coup.discountValue),
+        scope: coup.scope,
+        minimumCartValue: coup.minimumCartValue ? new Prisma.Decimal(coup.minimumCartValue) : null,
+        maximumDiscount: coup.maximumDiscount ? new Prisma.Decimal(coup.maximumDiscount) : null,
+        status: CouponStatus.ACTIVE,
+        startsAt,
+        expiresAt,
+      },
+    });
 
-  const menCategoryId = categoryIds.get('men');
-  if (!menCategoryId) {
-    throw new Error('Men category not found for MEN20 coupon');
+    if (coup.scope === CouponScope.CATEGORY && coup.categorySlug) {
+      const categoryId = categoryIds.get(coup.categorySlug);
+      if (categoryId) {
+        await prisma.couponCategory.create({
+          data: {
+            couponId: coupon.id,
+            categoryId,
+          },
+        });
+      }
+    }
   }
 
-  await prisma.coupon.create({
-    data: {
-      code: 'MEN20',
-      discountType: 'PERCENTAGE',
-      discountValue: 20,
-      scope: 'CATEGORY',
-      status: 'ACTIVE',
-      startsAt,
-      expiresAt,
-      categories: {
-        create: { categoryId: menCategoryId },
+  console.log(`  ✓ ${COUPONS.length} test coupons created (CLIQUE10, COTTON20, FLAT500)`);
+}
+
+// ─── Seed Banners ─────────────────────────────────────────────────────────────
+
+async function seedBanners(): Promise<void> {
+  for (const b of BANNERS) {
+    await prisma.banner.create({
+      data: {
+        title: b.title,
+        subtitle: b.subtitle,
+        badgeText: b.badgeText,
+        ctaLabel: b.ctaLabel,
+        ctaLink: b.ctaLink,
+        desktopImageUrl: b.desktopImageUrl,
+        tabletImageUrl: b.tabletImageUrl,
+        mobileImageUrl: b.mobileImageUrl,
+        altText: b.altText,
+        textAlignment: b.textAlignment,
+        isActive: b.isActive,
+        sortOrder: b.sortOrder,
+      },
+    });
+  }
+
+  console.log(`  ✓ ${BANNERS.length} hero banners created`);
+}
+
+// ─── Seed Store Settings ──────────────────────────────────────────────────────
+
+async function seedStoreSettings(): Promise<void> {
+  await prisma.storeSetting.upsert({
+    where: { key: 'shipping' },
+    create: {
+      key: 'shipping',
+      value: {
+        enabled: true,
+        flatRate: 0,
+        freeShippingThreshold: 999,
+      },
+    },
+    update: {
+      value: {
+        enabled: true,
+        flatRate: 0,
+        freeShippingThreshold: 999,
       },
     },
   });
 
-  const tshirt = await prisma.product.findUnique({
-    where: { slug: generateSlug('Premium Cotton T-Shirt') },
-    select: { id: true },
-  });
-
-  if (!tshirt) {
-    throw new Error('Premium Cotton T-Shirt not found for TSHIRT15 coupon');
-  }
-
-  await prisma.coupon.create({
-    data: {
-      code: 'TSHIRT15',
-      discountType: 'PERCENTAGE',
-      discountValue: 15,
-      scope: 'PRODUCT',
-      status: 'ACTIVE',
-      startsAt,
-      expiresAt,
-      products: {
-        create: { productId: tshirt.id },
+  await prisma.storeSetting.upsert({
+    where: { key: 'cod' },
+    create: {
+      key: 'cod',
+      value: {
+        enabled: true,
+        maxOrderValue: 50000,
+      },
+    },
+    update: {
+      value: {
+        enabled: true,
+        maxOrderValue: 50000,
       },
     },
   });
 
-  console.log('  ✓ 3 coupons (WELCOME10, MEN20, TSHIRT15)');
+  console.log('  ✓ Store settings configured (Shipping & COD)');
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  await clearDevData();
+  console.log('Starting Cotton Clique test environment setup...');
 
-  console.log('Seeding...');
-  const roleIds = await seedRoles();
-  await seedUsers(roleIds);
+  await clearCatalogData();
+  await seedRolesAndAdmin();
   const categoryIds = await seedCategories();
   const attrValueIds = await seedAttributes();
   await seedProducts(categoryIds, attrValueIds);
   await seedCoupons(categoryIds);
+  await seedBanners();
+  await seedStoreSettings();
 
-  console.log('\n✅  Development database seeded successfully.\n');
+  console.log('\n✅  Cotton Clique development manual testing environment prepared successfully.\n');
 }
 
 main()

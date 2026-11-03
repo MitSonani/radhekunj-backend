@@ -274,7 +274,11 @@ export async function verifyRazorpayPayment(
         select: { variantId: true, quantity: true },
       });
       // Atomically convert reservation into committed stock
-      await orderRepository.commitReservedInventory(items, tx);
+      await orderRepository.commitReservedInventory(items, tx, {
+        referenceType: "PAYMENT",
+        referenceId: targetPayment.id,
+        reason: "Payment verified - stock committed",
+      });
 
       // Update order status to CONFIRMED and clear expiresAt
       await tx.order.update({
@@ -379,7 +383,11 @@ export async function handleRazorpayWebhook(
               where: { orderId: paymentRecord.orderId },
               select: { variantId: true, quantity: true },
             });
-            await orderRepository.commitReservedInventory(items, tx);
+            await orderRepository.commitReservedInventory(items, tx, {
+              referenceType: "PAYMENT",
+              referenceId: paymentRecord.id,
+              reason: "Payment webhook capture - stock committed",
+            });
             await tx.order.update({
               where: { id: paymentRecord.orderId },
               data: { status: OrderStatus.CONFIRMED, expiresAt: null },
@@ -430,7 +438,11 @@ export async function handleRazorpayWebhook(
                 where: { orderId: order.id },
                 select: { variantId: true, quantity: true },
               });
-              await orderRepository.commitReservedInventory(items, tx);
+              await orderRepository.commitReservedInventory(items, tx, {
+                referenceType: "PAYMENT",
+                referenceId: createdPayment.id,
+                reason: "Payment webhook capture - stock committed",
+              });
               await tx.order.update({
                 where: { id: order.id },
                 data: { status: OrderStatus.CONFIRMED, expiresAt: null },

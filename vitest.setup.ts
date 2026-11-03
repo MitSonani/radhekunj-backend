@@ -38,6 +38,7 @@ beforeEach(async () => {
   await prisma.couponCategory.deleteMany().catch(() => {});
   await prisma.coupon.deleteMany().catch(() => {});
   await prisma.address.deleteMany().catch(() => {});
+  await prisma.inventoryMovement.deleteMany().catch(() => {});
   await prisma.inventory.deleteMany().catch(() => {});
   await prisma.productVariantAttribute.deleteMany().catch(() => {});
   await prisma.productImage.deleteMany().catch(() => {});
