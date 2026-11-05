@@ -5,8 +5,11 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   REDIS_URL: z.string().optional(),
-  CORS_ORIGIN: z.string().default('http://localhost:3001'),
-  JWT_SECRET: z.string().min(1, 'JWT_SECRET is required'),
+  CORS_ORIGIN: z
+    .string()
+    .default(
+      'http://localhost:3001,http://localhost:3002,https://admin.cottonclique.com',
+    ), JWT_SECRET: z.string().min(1, 'JWT_SECRET is required'),
   AWS_REGION: z.string().min(1).optional(),
   AWS_ACCESS_KEY_ID: z.string().min(1).optional(),
   AWS_SECRET_ACCESS_KEY: z.string().min(1).optional(),
