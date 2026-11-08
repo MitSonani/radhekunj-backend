@@ -100,16 +100,16 @@ describe('MSG91 WhatsApp OTP Provider', () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
 
       const callArgs = mockFetch.mock.calls[0];
-      expect(callArgs?.[0]).toBe('https://control.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/');
+      expect(callArgs?.[0]).toBe('https://api.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/');
       expect(callArgs?.[1]?.headers?.authkey).toBe('dummy_auth_key');
 
       const body = JSON.parse(callArgs?.[1]?.body as string);
       expect(body.integrated_number).toBe('919000000000');
       expect(body.content_type).toBe('template');
       expect(body.payload.messaging_product).toBe('whatsapp');
-      expect(body.payload.recipient).toBe('919876543210');
       expect(body.payload.template.name).toBe('otp_verification');
-      expect(body.payload.template.components[0].parameters[0].text).toBe('852963');
+      expect(body.payload.template.to_and_components[0].to[0]).toBe('919876543210');
+      expect(body.payload.template.to_and_components[0].components.body_1.value).toBe('852963');
     });
 
     it('handles MSG91 gateway rejection response safely', async () => {

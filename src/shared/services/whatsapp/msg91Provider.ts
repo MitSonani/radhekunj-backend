@@ -6,6 +6,7 @@ export interface Msg91Config {
   integratedNumber?: string;
   templateName?: string;
   languageCode?: string;
+  namespace?: string;
 }
 
 export class Msg91WhatsAppProvider implements WhatsAppProvider {
@@ -14,12 +15,14 @@ export class Msg91WhatsAppProvider implements WhatsAppProvider {
   private integratedNumber: string;
   private templateName: string;
   private languageCode: string;
+  private namespace: string;
 
   constructor(config?: Msg91Config) {
-    this.authKey = config?.authKey || process.env['MSG91_AUTH_KEY'] || '';
-    this.integratedNumber = config?.integratedNumber || process.env['MSG91_INTEGRATED_NUMBER'] || '';
-    this.templateName = config?.templateName || process.env['MSG91_WHATSAPP_TEMPLATE_NAME'] || 'otp_verification';
-    this.languageCode = config?.languageCode || process.env['MSG91_WHATSAPP_LANGUAGE_CODE'] || 'en';
+    this.authKey = config?.authKey !== undefined ? config.authKey : (process.env['MSG91_AUTH_KEY'] || '');
+    this.integratedNumber = config?.integratedNumber !== undefined ? config.integratedNumber : (process.env['MSG91_INTEGRATED_NUMBER'] || '');
+    this.templateName = config?.templateName !== undefined ? config.templateName : (process.env['MSG91_WHATSAPP_TEMPLATE_NAME'] || 'otp_verification');
+    this.languageCode = config?.languageCode !== undefined ? config.languageCode : (process.env['MSG91_WHATSAPP_LANGUAGE_CODE'] || 'en');
+    this.namespace = config?.namespace !== undefined ? config.namespace : (process.env['MSG91_WHATSAPP_NAMESPACE'] || '');
   }
 
   async sendOtp(options: SendWhatsAppOtpOptions): Promise<SendWhatsAppResult> {
@@ -50,39 +53,29 @@ export class Msg91WhatsAppProvider implements WhatsAppProvider {
       recipient = `${code}${recipient}`;
     }
 
-    // Standard MSG91 WhatsApp Outbound Template payload contract
+    // Official MSG91 WhatsApp Outbound Template payload
     const payload = {
       integrated_number: this.integratedNumber.replace(/\D/g, ''),
       content_type: 'template',
       payload: {
         messaging_product: 'whatsapp',
-        recipient,
         type: 'template',
         template: {
           name: this.templateName,
           language: {
             code: this.languageCode,
+            policy: 'deterministic',
           },
-          components: [
+          ...(this.namespace ? { namespace: this.namespace } : {}),
+          to_and_components: [
             {
-              type: 'body',
-              parameters: [
-                {
+              to: [recipient],
+              components: {
+                body_1: {
                   type: 'text',
-                  text: options.otp,
+                  value: options.otp,
                 },
-              ],
-            },
-            {
-              type: 'button',
-              sub_type: 'url',
-              index: '0',
-              parameters: [
-                {
-                  type: 'text',
-                  text: options.otp,
-                },
-              ],
+              },
             },
           ],
         },
@@ -93,7 +86,7 @@ export class Msg91WhatsAppProvider implements WhatsAppProvider {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-      const response = await fetch('https://control.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/', {
+      const response = await fetch('https://api.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/', {
         method: 'POST',
         headers: {
           authkey: this.authKey,

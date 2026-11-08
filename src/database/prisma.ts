@@ -3,17 +3,17 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { env, isProduction } from '../config/env.js';
 import { logger } from '../shared/utils/logger.js';
-import fs from 'node:fs';
+// import fs from 'node:fs';
 
 const pool = new pg.Pool({
   connectionString: env.DATABASE_URL,
-  ssl: {
-    ca: fs.readFileSync(
-      '/etc/ssl/certs/aws-rds/global-bundle.pem',
-      'utf8'
-    ),
-    rejectUnauthorized: true,
-  },
+  // ssl: {
+  //   ca: fs.readFileSync(
+  //     '/etc/ssl/certs/aws-rds/global-bundle.pem',
+  //     'utf8'
+  //   ),
+  //   rejectUnauthorized: true,
+  // },
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
