@@ -3,6 +3,7 @@ import 'express';
 export type AuthUser = {
   id: string;
   name: string;
+  isActive?: boolean;
   role: {
     id: string;
     name: string;

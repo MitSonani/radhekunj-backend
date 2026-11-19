@@ -7,6 +7,7 @@ import productsRouter from '../../modules/products/routes.js';
 import couponsRouter from '../../modules/coupons/routes.js';
 import adminOrdersRouter from '../../modules/orders/admin.routes.js';
 import analyticsRouter from '../../modules/analytics/routes.js';
+import customersRouter from '../../modules/customers/routes.js';
 import { authenticateJWT, requireRole } from '../../middleware/auth.js';
 import { ROLES } from '../../shared/constants/index.js';
 import { asyncHandler } from '../../shared/utils/asyncHandler.js';
@@ -28,6 +29,6 @@ router.use('/orders', adminOrdersRouter);
 router.use('/analytics', analyticsRouter);
 router.use('/banners', adminBannersRouter);
 router.use('/inventory', inventoryRouter);
-
+router.use('/customers', customersRouter);
 
 export default router;

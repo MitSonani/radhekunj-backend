@@ -14,6 +14,7 @@ model User {
   name         String   @db.VarChar
   countryCode  String?  @map("country_code") @db.VarChar
   mobileNumber String   @unique @map("mobile_number") @db.VarChar
+  isActive     Boolean  @default(true) @map("is_active")
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
 

@@ -32,6 +32,7 @@ interface VerifyOtpDetails {
 const AUTH_USER_SELECT = {
   id: true,
   name: true,
+  isActive: true,
   role: {
     select: {
       id: true,
@@ -43,6 +44,7 @@ const AUTH_USER_SELECT = {
 type AuthUser = {
   id: string;
   name: string;
+  isActive: boolean;
   role: { id: string; name: string } | null;
 };
 
@@ -174,6 +176,10 @@ export async function verifyOtp(
     select: AUTH_USER_SELECT,
   });
 
+  if (user && !user.isActive) {
+    throw new AppError(403, 'Account is disabled. Please contact support.');
+  }
+
   // If user does not exist, auto-register them
   if (!user) {
     // Check if the default 'customer' role exists
@@ -261,6 +267,10 @@ export async function verifyAdminOtp(
   const admin = await findAdminByMobileNumber(details.mobileNumber, details.countryCode);
   if (!admin) {
     throw new NotFoundError(ADMIN_NOT_FOUND_MESSAGE);
+  }
+
+  if (!admin.isActive) {
+    throw new AppError(403, 'Account is disabled. Please contact support.');
   }
 
   await deleteOtp(identifier);

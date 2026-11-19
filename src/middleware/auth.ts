@@ -42,6 +42,7 @@ export async function authenticateJWT(
       select: {
         id: true,
         name: true,
+        isActive: true,
         role: {
           select: {
             id: true,
@@ -53,6 +54,11 @@ export async function authenticateJWT(
 
     if (!user) {
       next(new AppError(401, 'User not found or session invalid'));
+      return;
+    }
+
+    if (!user.isActive) {
+      next(new AppError(403, 'Account is disabled. Please contact support.'));
       return;
     }
 
