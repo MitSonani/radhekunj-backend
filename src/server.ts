@@ -18,7 +18,11 @@ async function startServer(): Promise<void> {
   await connectRedis();
   startNotificationWorker();
   startOrderExpiryWorker();
-  void reconcileExpiredOrders();
+  reconcileExpiredOrders().catch((err) => {
+    logger.error('Failed to run initial order reconciliation', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
 
   const app = createApp();
   server = createServer(app);

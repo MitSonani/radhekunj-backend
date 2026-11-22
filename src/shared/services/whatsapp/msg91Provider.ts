@@ -113,11 +113,13 @@ export class Msg91WhatsAppProvider implements WhatsAppProvider {
         status?: string;
         hasError?: boolean;
         message?: string;
-        data?: { message_id?: string; request_id?: string };
+        data?: { message_id?: string; request_id?: string } | string;
+        request_id?: string;
+        message_id?: string;
       };
 
       if (data.hasError || data.status === 'error' || data.status === 'fail') {
-        const errorMsg = data.message || 'WhatsApp message rejected by MSG91 gateway';
+        const errorMsg = data.message || (typeof data.data === 'string' ? data.data : 'WhatsApp message rejected by MSG91 gateway');
         logger.error('[MSG91 WhatsApp] Gateway rejected message', { to: masked, error: errorMsg });
         return {
           success: false,
@@ -126,7 +128,11 @@ export class Msg91WhatsAppProvider implements WhatsAppProvider {
         };
       }
 
-      const messageId = data.data?.message_id || data.data?.request_id || `msg91_wa_${Date.now()}`;
+      const messageId =
+        (typeof data.data === 'object' && (data.data?.message_id || data.data?.request_id)) ||
+        data.request_id ||
+        data.message_id ||
+        `msg91_wa_${Date.now()}`;
       logger.info('[MSG91 WhatsApp] OTP template sent successfully', { to: masked, messageId });
 
       return {
