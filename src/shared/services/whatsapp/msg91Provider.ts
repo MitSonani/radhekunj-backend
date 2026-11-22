@@ -75,6 +75,11 @@ export class Msg91WhatsAppProvider implements WhatsAppProvider {
                   type: 'text',
                   value: options.otp,
                 },
+                button_1: {
+                  subtype: 'url',
+                  type: 'text',
+                  value: options.otp,
+                },
               },
             },
           ],
