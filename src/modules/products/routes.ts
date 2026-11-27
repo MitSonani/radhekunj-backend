@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { validateRequest } from '../../shared/utils/validateRequest.js';
 import { asyncHandler } from '../../shared/utils/asyncHandler.js';
+import { excelUpload } from '../../middleware/upload.js';
 import * as productController from './controller.js';
 import {
   createProductSchema,
@@ -31,6 +32,20 @@ router.get(
   validateRequest(listProductsQuerySchema, 'query'),
   asyncHandler(productController.listProductsHandler),
 );
+
+// Bulk upload endpoints
+router.get(
+  '/bulk-upload/template',
+  asyncHandler(productController.downloadBulkUploadTemplateHandler),
+);
+
+router.post(
+  '/bulk-upload',
+  excelUpload.single('file'),
+  asyncHandler(productController.bulkUploadProductsHandler),
+);
+
+router.post('/bulk', asyncHandler(productController.bulkUploadProductsHandler));
 
 router.get(
   '/:id',

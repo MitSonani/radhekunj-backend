@@ -1,8 +1,10 @@
 import { Request, Response } from 'express';
 import { ProductStatus } from '@prisma/client';
 import * as productService from './service.js';
+import * as bulkUploadService from './bulkUpload.service.js';
 import { ApiResponse } from '../../shared/types/index.js';
 import { HTTP_STATUS } from '../../shared/constants/index.js';
+import { ValidationError } from '../../shared/errors/appError.js';
 import type { AllowedImageMimeType } from '../../shared/services/s3.js';
 
 export async function createProductHandler(req: Request, res: Response): Promise<void> {
@@ -229,4 +231,44 @@ export async function deleteProductImageHandler(req: Request, res: Response): Pr
   };
 
   res.status(HTTP_STATUS.OK).json(response);
+}
+
+export async function bulkUploadProductsHandler(req: Request, res: Response): Promise<void> {
+  let source: Buffer | Array<Record<string, unknown>>;
+
+  const body = req.body as Record<string, unknown> | undefined;
+
+  if (req.file?.buffer) {
+    source = req.file.buffer;
+  } else if (Array.isArray(body?.['products'])) {
+    source = body['products'] as Array<Record<string, unknown>>;
+  } else if (Array.isArray(body?.['rows'])) {
+    source = body['rows'] as Array<Record<string, unknown>>;
+  } else if (Array.isArray(req.body)) {
+    source = req.body as Array<Record<string, unknown>>;
+  } else {
+    throw new ValidationError(
+      'Please upload an Excel/CSV file with key "file" or provide a JSON array of rows in the request body',
+    );
+  }
+
+  const result = await bulkUploadService.processBulkUpload(source);
+
+  const response: ApiResponse = {
+    success: result.success,
+    data: result,
+    message: result.success
+      ? `Bulk upload processed successfully (${result.productsCreated} products created, ${result.productsUpdated} updated, ${result.variantsCreated} variants created, ${result.variantsUpdated} updated)`
+      : `Bulk upload processed with ${result.errors.length} error(s)`,
+  };
+
+  res.status(HTTP_STATUS.OK).json(response);
+}
+
+export async function downloadBulkUploadTemplateHandler(_req: Request, res: Response): Promise<void> {
+  const csvContent = await Promise.resolve(bulkUploadService.getBulkUploadTemplateCsv());
+
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename="product_bulk_upload_template.csv"');
+  res.status(HTTP_STATUS.OK).send(csvContent);
 }

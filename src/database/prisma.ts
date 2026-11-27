@@ -5,15 +5,17 @@ import { env, isProduction } from '../config/env.js';
 import { logger } from '../shared/utils/logger.js';
 import fs from 'node:fs';
 
+const sslCertPath = '/etc/ssl/certs/aws-rds/global-bundle.pem';
+const sslConfig = fs.existsSync(sslCertPath)
+  ? {
+      ca: fs.readFileSync(sslCertPath, 'utf8'),
+      rejectUnauthorized: true,
+    }
+  : false;
+
 const pool = new pg.Pool({
   connectionString: env.DATABASE_URL,
-  ssl: {
-    ca: fs.readFileSync(
-      '/etc/ssl/certs/aws-rds/global-bundle.pem',
-      'utf8'
-    ),
-    rejectUnauthorized: true,
-  },
+  ...(sslConfig ? { ssl: sslConfig } : {}),
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
